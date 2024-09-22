@@ -29,7 +29,7 @@ dependencies {
 }
 
 application {
-  mainClass.set("com.github.sheriff.kotlin.glock.GlockApplicationKt")
+  mainClass.set("com.github.demidko.glock.GlockApplicationKt")
   applicationDefaultJvmArgs += "--enable-preview"
 }
 
