@@ -64,8 +64,7 @@ class ChatOps(
     markAsTemp(m, dialogLifetime)
     val rules =
       """
-        Logging into the game is done by trying to shoot someone else's message, from this point you can be banned (and you can ban other players).
-        If you are not logged in, then you cannot be shot.
+        Matthew 26:52 for all they that take the sword shall perish with the sword.
       """.trimIndent()
     reply(m, rules, Temp(dialogLifetime))
   }
