@@ -70,26 +70,6 @@ class ChatOps(
     reply(m, rules, Temp(dialogLifetime))
   }
 
-  fun tryLeaveGame(m: Message) {
-    if (isRestricted(m)) {
-      return
-    }
-    val dialogLifetime = ofSeconds(10)
-    markAsTemp(m, dialogLifetime)
-    if (isIsHePeacefulToday(m)) {
-      reply(m, "🕊️")
-      return leaveGame(m)
-    }
-    val notification =
-      "Since you have already shot other users, you cannot quit the game until 24 hours have passed 😈"
-    reply(m, notification, Temp(dialogLifetime))
-  }
-
-  private fun leaveGame(m: Message) {
-    val userId = m.from?.id ?: return
-    userToLastActivity.remove(userId)
-  }
-
   private fun isIsHePeacefulToday(message: Message): Boolean {
     val userId = message.from?.id ?: return true
     val lastActivity = userToLastActivity.get<Long>(userId) ?: return true
