@@ -40,6 +40,7 @@ kotlin {
       "-Xjsr305=strict",
       "-Xvalue-classes",
       "-opt-in=kotlin.ExperimentalStdlibApi",
+      "-opt-in=kotlinx.serialization.ExperimentalSerializationApi",
       "-opt-in=kotlin.time.ExperimentalTime"
     )
   }
