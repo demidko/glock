@@ -6,12 +6,11 @@ import com.sksamuel.hoplite.ConfigLoaderBuilder
 import com.sksamuel.hoplite.addEnvironmentSource
 import java.time.Duration
 import java.time.Duration.ofMinutes
-import java.time.Duration.ofSeconds
 import java.time.ZoneId
 
 open class ApplicationFactory {
   data class Config(
-    val telegramApiToken: String,
+    val botToken: String,
     val storageId: Long,
     val healingConstant: Long = 7,
     val healingTimeZone: String = "Asia/Jerusalem",
@@ -42,7 +41,7 @@ open class ApplicationFactory {
 
   open val glockBot by lazy {
     GlockBot(
-      config.telegramApiToken,
+      config.botToken,
       fromId(config.storageId),
       restrictions,
       config.restrictionsDuration,
