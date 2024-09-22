@@ -5,7 +5,7 @@ import java.lang.Thread.startVirtualThread
 import java.time.Duration
 import java.time.Duration.ofSeconds
 
-fun main() {
+fun main(args: Array<String>) {
   val glockBot = ApplicationFactory().glockBot
 
   glockBot.startPollingAsync()

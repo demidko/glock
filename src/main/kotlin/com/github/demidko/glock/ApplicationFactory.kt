@@ -7,6 +7,7 @@ import com.sksamuel.hoplite.addEnvironmentSource
 import java.time.Duration
 import java.time.Duration.ofMinutes
 import java.time.ZoneId
+import kotlin.time.toKotlinDuration
 
 open class ApplicationFactory {
   data class Config(
@@ -25,7 +26,8 @@ open class ApplicationFactory {
   }
 
   init {
-    println(config.restrictionsDuration)
+    val duration = config.restrictionsDuration.toKotlinDuration().toString()
+    println("Restrictions duration: $duration")
   }
 
   open val restrictions = ChatPermissions(
