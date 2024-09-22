@@ -239,10 +239,6 @@ class ChatOps(
     if (isTopic(target)) {
       return
     }
-    if (!isLegalTarget(target)) {
-      reply(target, "💨")
-      return
-    }
     val userId = target.from?.id ?: return
     val untilEpochSecond = now().epochSecond + restrictionsDurationSec
     bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
@@ -255,11 +251,6 @@ class ChatOps(
       }
     }
     reply(target, shootEmoji)
-  }
-
-  private fun isLegalTarget(m: Message): Boolean {
-    val userId = m.from?.id ?: return false
-    return userToLastActivity.keys.contains(userId)
   }
 
   private fun isLifetimeExceeded(epochSecond: Long): Boolean {
