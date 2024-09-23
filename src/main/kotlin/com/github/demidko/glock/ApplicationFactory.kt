@@ -13,7 +13,6 @@ import kotlin.time.toKotlinDuration
 open class ApplicationFactory {
   data class Config(
     val botToken: String,
-    val storageId: Long,
     val healingConstant: Long = 7,
     val healingTimeZone: String = "Asia/Jerusalem",
     val restrictionsDuration: Duration = ofMinutes(5)
@@ -47,7 +46,6 @@ open class ApplicationFactory {
   open val glockBot by lazy {
     GlockBot(
       config.botToken,
-      fromId(config.storageId),
       restrictions,
       config.restrictionsDuration,
       config.healingConstant,

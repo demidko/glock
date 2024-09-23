@@ -6,7 +6,6 @@ import com.github.kotlintelegrambot.dispatcher.command
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleCommand
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleMessage
 import com.github.kotlintelegrambot.dispatcher.message
-import com.github.kotlintelegrambot.entities.ChatId
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
@@ -20,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap
 
 class GlockBot(
   apiKey: String,
-  storageId: ChatId,
   private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
@@ -54,8 +52,8 @@ class GlockBot(
     forEachChat(ChatOps::cleanTempMessages)
   }
 
-  fun startPollingAsync() {
-    startVirtualThread(bot::startPolling)
+  fun startPolling() {
+    bot.startPolling()
   }
 
   private fun getChatOps(chatId: Long): ChatOps {
