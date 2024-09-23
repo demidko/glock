@@ -49,8 +49,6 @@ class GlockBot(
       }
     }
 
-  private val storage = MagicStorage(bot, storageId)
-
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
   fun cleanTempMessages() {
@@ -77,7 +75,6 @@ class GlockBot(
     return ChatOps(
       bot,
       fromId(chatId),
-      storage,
       restrictions,
       restrictionsDuration,
       healingConstant,

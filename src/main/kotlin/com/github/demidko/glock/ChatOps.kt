@@ -8,10 +8,8 @@ import org.apache.commons.collections4.QueueUtils.synchronizedQueue
 import org.apache.commons.collections4.queue.CircularFifoQueue
 import java.io.Closeable
 import java.time.Duration
-import java.time.Duration.between
 import java.time.Duration.ofSeconds
 import java.time.Instant.now
-import java.time.Instant.ofEpochSecond
 import java.time.LocalTime
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentHashMap
@@ -26,7 +24,6 @@ import kotlin.random.Random.Default.nextLong
 class ChatOps(
   private val bot: Bot,
   private val chatId: ChatId,
-  private val userToLastActivity: MagicStorage,
   private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
@@ -51,11 +48,6 @@ class ChatOps(
     }.get()
   }
 
-  private fun logActivity(m: Message) {
-    val userId = m.from?.id ?: return
-    userToLastActivity[userId] = now().epochSecond
-  }
-
   fun help(m: Message) {
     if (isRestricted(m)) {
       return
@@ -69,19 +61,7 @@ class ChatOps(
     reply(m, rules, Temp(dialogLifetime))
   }
 
-  private fun isIsHePeacefulToday(message: Message): Boolean {
-    val userId = message.from?.id ?: return true
-    val lastActivity = userToLastActivity.get<Long>(userId) ?: return true
-    val passedHours = between(ofEpochSecond(lastActivity), now()).toHours()
-    return passedHours >= 24
-  }
-
   fun filterMessage(message: Message) {
-    if (isRestricted(message)) {
-      val messageId = message.messageId
-      bot.deleteMessage(chatId, messageId)
-      return
-    }
     recentMessages += message
   }
 
@@ -134,7 +114,6 @@ class ChatOps(
     if (isRestricted(gunfighterMessage)) {
       return
     }
-    logActivity(gunfighterMessage)
     val statuetteId = reply(gunfighterMessage, "🗿", Persistent)
     if (statuetteId != null) {
       statuettes += statuetteId
@@ -155,20 +134,21 @@ class ChatOps(
     if (isRestricted(gunfighterMessage)) {
       return
     }
-    logActivity(gunfighterMessage)
-    if (recentMessages.isEmpty()) {
+    val gunfighterId = gunfighterMessage.from?.id ?: return
+    val targetMessages = recentMessages.filter { it.from?.id != gunfighterId }
+    if (targetMessages.isEmpty()) {
       markAsTemp(gunfighterMessage)
       return
     }
     val emoji = setOf("💥", "🗯️", "⚡️")
-    if (recentMessages.size == 1) {
-      mute(recentMessages.random(), restrictionsDuration.seconds, emoji.random())
+    if (targetMessages.size == 1) {
+      mute(targetMessages.random(), restrictionsDuration.seconds, emoji.random())
       markAsTemp(gunfighterMessage)
       return
     }
-    val targetsCount = nextInt(2, recentMessages.size + 1)
+    val targetsCount = nextInt(2, targetMessages.size + 1)
     for (t in 1..targetsCount) {
-      val target = recentMessages.random()
+      val target = targetMessages.random()
       val restrictionsDurationSec = nextLong(45, restrictionsDuration.seconds * 2 + 1)
       mute(target, restrictionsDurationSec, emoji.random())
     }
@@ -179,7 +159,6 @@ class ChatOps(
     if (isRestricted(gunfighterMessage)) {
       return
     }
-    logActivity(gunfighterMessage)
     val target = gunfighterMessage.replyToMessage
     if (target == null) {
       mute(gunfighterMessage, restrictionsDuration.seconds, "💥")
