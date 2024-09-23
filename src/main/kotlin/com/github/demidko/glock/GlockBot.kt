@@ -48,7 +48,13 @@ class GlockBot(
 
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
+  private var previousChatsCount = 0
+
   fun cleanTempMessages() {
+    if(idToChatOps.count() > previousChatsCount) {
+      previousChatsCount = idToChatOps.count()
+      println("Bot has $previousChatsCount chats")
+    }
     forEachChat(ChatOps::cleanTempMessages)
   }
 
