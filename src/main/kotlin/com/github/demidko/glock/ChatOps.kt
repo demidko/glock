@@ -14,7 +14,6 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.Executors.newSingleThreadExecutor
 import kotlin.random.Random.Default.nextInt
 import kotlin.random.Random.Default.nextLong
 
@@ -28,10 +27,8 @@ class ChatOps(
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId
-) : Closeable {
+) {
 
-  private val restrictionsExecutor = newSingleThreadExecutor()
-  private val usersToRestrictions = ConcurrentHashMap<Long, Long>()
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
   private val recentMessages = synchronizedQueue(CircularFifoQueue<Message>(12))
   private val statuettes = ConcurrentLinkedQueue<Long>()
@@ -41,17 +38,7 @@ class ChatOps(
     messagesToLifetimes.forEach(tempMessagesCount, ::tryRemoveMessage)
   }
 
-  fun processRestrictions() {
-    restrictionsExecutor.submit {
-      val restrictedUsersCount = usersToRestrictions.mappingCount()
-      usersToRestrictions.forEach(restrictedUsersCount, ::processRestriction)
-    }.get()
-  }
-
   fun help(m: Message) {
-    if (isRestricted(m)) {
-      return
-    }
     val dialogLifetime = ofSeconds(20)
     markAsTemp(m, dialogLifetime)
     val rules =
@@ -61,14 +48,7 @@ class ChatOps(
     reply(m, rules, Temp(dialogLifetime))
   }
 
-  fun filterMessage(message: Message) {
-    recentMessages += message
-  }
-
   fun heal(healerMessage: Message, args: List<String>) {
-    if (isRestricted(healerMessage)) {
-      return
-    }
     val target = healerMessage.replyToMessage ?: return
     val targetId = target.from?.id ?: return
     val magicCode = extractMagicCode(args) ?: return
@@ -88,9 +68,6 @@ class ChatOps(
         canPinMessages = true
       )
     )
-    restrictionsExecutor.execute {
-      usersToRestrictions.remove(targetId)
-    }
     val emoji = setOf("💊", "💉", "🚑")
     reply(target, emoji.random())
     markAsTemp(healerMessage)
@@ -111,9 +88,6 @@ class ChatOps(
   }
 
   fun statuette(gunfighterMessage: Message) {
-    if (isRestricted(gunfighterMessage)) {
-      return
-    }
     val statuetteId = reply(gunfighterMessage, "🗿", Persistent)
     if (statuetteId != null) {
       statuettes += statuetteId
@@ -122,18 +96,16 @@ class ChatOps(
   }
 
   fun tryProcessStatuette(message: Message) {
-    if (isRestricted(message)) {
+    val statuette = statuettes.poll()
+    if (statuette == null) {
+      recentMessages += message
       return
     }
-    val statuette = statuettes.poll() ?: return
     bot.deleteMessage(chatId, statuette)
     mute(message, restrictionsDuration.seconds, "💥")
   }
 
   fun buckshot(gunfighterMessage: Message) {
-    if (isRestricted(gunfighterMessage)) {
-      return
-    }
     val gunfighterId = gunfighterMessage.from?.id ?: return
     val targetMessages = recentMessages.filter { it.from?.id != gunfighterId }
     if (targetMessages.isEmpty()) {
@@ -156,22 +128,13 @@ class ChatOps(
   }
 
   fun shoot(gunfighterMessage: Message) {
-    if (isRestricted(gunfighterMessage)) {
-      return
-    }
     val target = gunfighterMessage.replyToMessage
     if (target == null) {
-      mute(gunfighterMessage, restrictionsDuration.seconds, "💥")
-    } else {
-      mute(target, restrictionsDuration.seconds, "💥")
+      markAsTemp(gunfighterMessage)
+      return
     }
+    mute(target, restrictionsDuration.seconds, "💥")
     markAsTemp(gunfighterMessage)
-  }
-
-  private fun processRestriction(userId: Long, epochSecond: Long) {
-    if (isLifetimeExceeded(epochSecond)) {
-      usersToRestrictions.remove(userId)
-    }
   }
 
   private fun tryRemoveMessage(messageId: Long, epochSecond: Long) {
@@ -179,12 +142,6 @@ class ChatOps(
       bot.deleteMessage(chatId, messageId)
       messagesToLifetimes.remove(messageId)
     }
-  }
-
-  private fun isRestricted(message: Message): Boolean {
-    val userId = message.from?.id ?: return false
-    val epochSecond = usersToRestrictions[userId]
-    return epochSecond != null && !isLifetimeExceeded(epochSecond)
   }
 
   private fun isTopic(message: Message): Boolean {
@@ -200,14 +157,6 @@ class ChatOps(
     val userId = target.from?.id ?: return
     val untilEpochSecond = now().epochSecond + restrictionsDurationSec
     bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
-    restrictionsExecutor.execute {
-      usersToRestrictions.compute(userId) { _, previousRestriction ->
-        when (previousRestriction == null || untilEpochSecond > previousRestriction) {
-          true -> untilEpochSecond
-          else -> previousRestriction
-        }
-      }
-    }
     reply(target, shootEmoji)
   }
 
@@ -219,7 +168,7 @@ class ChatOps(
 
   private class Temp(val duration: Duration) : ReplyLifetime
 
-  private object Persistent : ReplyLifetime
+  private data object Persistent : ReplyLifetime
 
   private fun reply(to: Message, emoji: String, lifetime: ReplyLifetime = Temp(ofSeconds(3))): Long? {
     val message =
@@ -236,9 +185,5 @@ class ChatOps(
 
   private fun markAsTemp(message: Message, lifetime: Duration = ofSeconds(3)) {
     messagesToLifetimes[message.messageId] = now().epochSecond + lifetime.seconds
-  }
-
-  override fun close() {
-    restrictionsExecutor.close()
   }
 }

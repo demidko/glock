@@ -25,7 +25,7 @@ class GlockBot(
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId
-) : Closeable {
+) {
 
   init {
     require(restrictionsDuration in ofSeconds(30)..ofDays(366)) {
@@ -44,7 +44,6 @@ class GlockBot(
         command("heal", handleCommand(ChatOps::heal))
         command("help", handleCommand(ChatOps::help))
         command("start", handleCommand(ChatOps::help))
-        message(handleMessage(ChatOps::filterMessage))
         message(handleMessage(ChatOps::tryProcessStatuette))
       }
     }
@@ -55,16 +54,8 @@ class GlockBot(
     forEachChat(ChatOps::cleanTempMessages)
   }
 
-  fun processRestrictions() {
-    forEachChat(ChatOps::processRestrictions)
-  }
-
   fun startPollingAsync() {
     startVirtualThread(bot::startPolling)
-  }
-
-  override fun close() {
-    forEachChat(ChatOps::close)
   }
 
   private fun getChatOps(chatId: Long): ChatOps {
