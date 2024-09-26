@@ -9,7 +9,6 @@ import com.github.kotlintelegrambot.dispatcher.message
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
-import java.io.Closeable
 import java.lang.Thread.startVirtualThread
 import java.time.Duration
 import java.time.Duration.ofDays
@@ -22,7 +21,8 @@ class GlockBot(
   private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
-  private val healingTimeZone: ZoneId
+  private val healingTimeZone: ZoneId,
+  private val spyModule: SpyModule
 ) {
 
   init {
@@ -43,6 +43,11 @@ class GlockBot(
         command("help", handleCommand(ChatOps::help))
         command("start", handleCommand(ChatOps::help))
         message(handleMessage(ChatOps::tryProcessStatuette))
+        message {
+          startVirtualThread {
+            spyModule.spy(message)
+          }
+        }
       }
     }
 
@@ -51,7 +56,7 @@ class GlockBot(
   private var previousChatsCount = 0
 
   fun cleanTempMessages() {
-    if(idToChatOps.count() > previousChatsCount) {
+    if (idToChatOps.count() > previousChatsCount) {
       previousChatsCount = idToChatOps.count()
       println("Bot has $previousChatsCount chats")
     }
