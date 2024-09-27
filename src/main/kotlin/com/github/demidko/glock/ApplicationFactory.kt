@@ -1,5 +1,6 @@
 package com.github.demidko.glock
 
+import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.sksamuel.hoplite.ConfigLoaderBuilder
 import com.sksamuel.hoplite.ExperimentalHoplite
@@ -12,10 +13,9 @@ import kotlin.time.toKotlinDuration
 open class ApplicationFactory {
   data class Config(
     val botToken: String,
-    val excludedChatsUsernames: Set<String>,
     val healingConstant: Long = 7,
     val healingTimeZone: String = "Asia/Jerusalem",
-    val restrictionsDuration: Duration = ofMinutes(5),
+    val restrictionsDuration: Duration = ofMinutes(5)
   )
 
   @OptIn(ExperimentalHoplite::class)
@@ -43,18 +43,13 @@ open class ApplicationFactory {
     canPinMessages = false
   )
 
-  open val spyModule by lazy {
-    SpyModule(config.excludedChatsUsernames)
-  }
-
   open val glockBot by lazy {
     GlockBot(
       config.botToken,
       restrictions,
       config.restrictionsDuration,
       config.healingConstant,
-      ZoneId.of(config.healingTimeZone),
-      spyModule
+      ZoneId.of(config.healingTimeZone)
     )
   }
 }
