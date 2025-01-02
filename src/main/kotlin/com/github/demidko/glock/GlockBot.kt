@@ -9,7 +9,6 @@ import com.github.kotlintelegrambot.dispatcher.message
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
-import java.io.Closeable
 import java.lang.Thread.startVirtualThread
 import java.time.Duration
 import java.time.Duration.ofDays
@@ -48,13 +47,7 @@ class GlockBot(
 
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
-  private var previousChatsCount = 0
-
   fun cleanTempMessages() {
-    if(idToChatOps.count() > previousChatsCount) {
-      previousChatsCount = idToChatOps.count()
-      println("Bot has $previousChatsCount chats")
-    }
     forEachChat(ChatOps::cleanTempMessages)
   }
 

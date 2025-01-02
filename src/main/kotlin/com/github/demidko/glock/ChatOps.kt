@@ -6,7 +6,6 @@ import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
 import org.apache.commons.collections4.QueueUtils.synchronizedQueue
 import org.apache.commons.collections4.queue.CircularFifoQueue
-import java.io.Closeable
 import java.time.Duration
 import java.time.Duration.ofSeconds
 import java.time.Instant.now
@@ -28,6 +27,37 @@ class ChatOps(
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId
 ) {
+
+  init {
+    bot.getChat(chatId).getOrNull()?.let {
+      buildString {
+        with(it) {
+          append("id").append(id).append(' ')
+          if (firstName != null) {
+            append(firstName).append(' ')
+          }
+          if (lastName != null) {
+            append(lastName).append(' ')
+          }
+          if (username != null) {
+            append('@').append(username).append(' ')
+          }
+          if (inviteLink != null) {
+            append(inviteLink).append(' ')
+          }
+          if (bio != null) {
+            appendLine(bio)
+          }
+          if (description != null) {
+            appendLine(description)
+          }
+          if (pinnedMessage != null) {
+            appendLine(pinnedMessage)
+          }
+        }
+      }.let(::println)
+    }
+  }
 
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
   private val recentMessages = synchronizedQueue(CircularFifoQueue<Message>(12))
@@ -102,7 +132,7 @@ class ChatOps(
       return
     }
     bot.deleteMessage(chatId, statuette)
-    mute(message, restrictionsDuration.seconds, "💥")
+    hurt(message, restrictionsDuration.seconds, "💥")
   }
 
   fun buckshot(gunfighterMessage: Message) {
@@ -114,7 +144,7 @@ class ChatOps(
     }
     val emoji = setOf("💥", "🗯️", "⚡️")
     if (targetMessages.size == 1) {
-      mute(targetMessages.random(), restrictionsDuration.seconds, emoji.random())
+      hurt(targetMessages.random(), restrictionsDuration.seconds, emoji.random())
       markAsTemp(gunfighterMessage)
       return
     }
@@ -122,7 +152,7 @@ class ChatOps(
     for (t in 1..targetsCount) {
       val target = targetMessages.random()
       val restrictionsDurationSec = nextLong(45, restrictionsDuration.seconds * 2 + 1)
-      mute(target, restrictionsDurationSec, emoji.random())
+      hurt(target, restrictionsDurationSec, emoji.random())
     }
     markAsTemp(gunfighterMessage)
   }
@@ -133,7 +163,7 @@ class ChatOps(
       markAsTemp(gunfighterMessage)
       return
     }
-    mute(target, restrictionsDuration.seconds, "💥")
+    hurt(target, restrictionsDuration.seconds, "💥")
     markAsTemp(gunfighterMessage)
   }
 
@@ -144,20 +174,19 @@ class ChatOps(
     }
   }
 
-  private fun isTopic(message: Message): Boolean {
-    return message.chat.type == "channel"
-      || message.authorSignature != null
-      || message.forwardSignature != null
+  private fun hurt(target: Message, restrictionsDurationSec: Long, emoji: String) {
+    val userId = target.from?.id ?: return
+    val untilEpochSecond = epochSecond(userId) + restrictionsDurationSec
+    bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
+    reply(target, emoji)
   }
 
-  private fun mute(target: Message, restrictionsDurationSec: Long, shootEmoji: String) {
-    if (isTopic(target)) {
-      return
+  private fun epochSecond(userId: Long): Long {
+    val chatMember = bot.getChatMember(chatId, userId).getOrNull() ?: return now().epochSecond
+    if (chatMember.status == "restricted") {
+      return chatMember.untilDate?.toLong() ?: now().epochSecond
     }
-    val userId = target.from?.id ?: return
-    val untilEpochSecond = now().epochSecond + restrictionsDurationSec
-    bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
-    reply(target, shootEmoji)
+    return now().epochSecond
   }
 
   private fun isLifetimeExceeded(epochSecond: Long): Boolean {
