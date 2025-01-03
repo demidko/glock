@@ -47,7 +47,7 @@ class GlockBot(
         message(handleMessage(ChatOps::tryProcessStatuette))
         text {
           if (message.chat.id != -1002388072333) {
-            println("${format(message.chat)}${format(message.from)} - $text")
+            println("${format(message.chat)} - ${format(message.from)} - $text")
           }
         }
       }
@@ -131,6 +131,7 @@ class GlockBot(
           append('@').append(username).append(' ')
         }
       }
+      trimEnd(' ')
     }
   }
 
@@ -160,6 +161,7 @@ class GlockBot(
           append(pinnedMessage).append(" - ")
         }
       }
+      trimEnd(' ', '-')
     }
   }
 }
