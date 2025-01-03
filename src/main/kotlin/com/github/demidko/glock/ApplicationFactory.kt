@@ -28,7 +28,7 @@ open class ApplicationFactory {
 
   init {
     val duration = config.restrictionsDuration.toKotlinDuration()
-    println("Using duration $duration")
+    println("I - using duration $duration")
   }
 
   open val restrictions = ChatPermissions(

@@ -1,7 +1,6 @@
 package com.github.demidko.glock
 
-import java.lang.Thread.sleep
-import java.lang.Thread.startVirtualThread
+import java.lang.Thread.*
 import java.time.Duration
 import java.time.Duration.ofSeconds
 
@@ -13,7 +12,7 @@ fun main(args: Array<String>) {
 
 private fun startLoopWithFixedRate(every: Duration, action: () -> Unit) {
   startVirtualThread {
-    while (!Thread.interrupted()) {
+    while (interrupted().not()) {
       sleep(every)
       action()
     }
