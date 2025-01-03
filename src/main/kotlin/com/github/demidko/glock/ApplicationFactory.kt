@@ -4,6 +4,7 @@ import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.sksamuel.hoplite.ConfigLoaderBuilder
 import com.sksamuel.hoplite.ExperimentalHoplite
 import com.sksamuel.hoplite.addEnvironmentSource
+import org.slf4j.LoggerFactory.getLogger
 import java.time.Duration
 import java.time.Duration.ofMinutes
 import java.time.ZoneId
@@ -28,7 +29,7 @@ open class ApplicationFactory {
 
   init {
     val duration = config.restrictionsDuration.toKotlinDuration()
-    println("Restrictions duration: $duration")
+    getLogger(javaClass).info("Using duration $duration")
   }
 
   open val restrictions = ChatPermissions(
