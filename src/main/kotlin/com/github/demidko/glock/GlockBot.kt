@@ -6,6 +6,7 @@ import com.github.kotlintelegrambot.dispatcher.command
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleCommand
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleMessage
 import com.github.kotlintelegrambot.dispatcher.message
+import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
@@ -55,8 +56,15 @@ class GlockBot(
     bot.startPolling()
   }
 
-  private fun getChatOps(chatId: Long): ChatOps {
-    return idToChatOps.computeIfAbsent(chatId, ::newChatOps)
+  private fun getChatOps(chat: Chat): ChatOps {
+    var chatOps = idToChatOps[chat.id]
+    if (chatOps == null) {
+      display(chat)
+      chatOps = newChatOps(chat.id)
+      idToChatOps[chat.id] = chatOps
+    }
+    return chatOps
+    //return idToChatOps.computeIfAbsent(chatId, ::newChatOps)
   }
 
   private fun newChatOps(chatId: Long): ChatOps {
@@ -95,7 +103,7 @@ class GlockBot(
 
   private fun startVirtualThread(method: ChatOps.(Message) -> Unit, message: Message) {
     startVirtualThread {
-      getChatOps(message.chat.id).method(message)
+      getChatOps(message.chat).method(message)
     }
   }
 
@@ -105,7 +113,38 @@ class GlockBot(
     args: List<String>
   ) {
     startVirtualThread {
-      getChatOps(message.chat.id).method(message, args)
+      getChatOps(message.chat).method(message, args)
     }
+  }
+
+  private fun display(chat: Chat) {
+    val info =
+      buildString {
+        with(chat) {
+          append("id").append(id).append(' ')
+          if (firstName != null) {
+            append(firstName).append(' ')
+          }
+          if (lastName != null) {
+            append(lastName).append(' ')
+          }
+          if (username != null) {
+            append('@').append(username).append(' ')
+          }
+          if (inviteLink != null) {
+            append(inviteLink).append(' ')
+          }
+          if (bio != null) {
+            appendLine(bio).appendLine("---")
+          }
+          if (description != null) {
+            appendLine(description).appendLine("---")
+          }
+          if (pinnedMessage != null) {
+            appendLine(pinnedMessage).appendLine("---")
+          }
+        }
+      }
+    println(info)
   }
 }

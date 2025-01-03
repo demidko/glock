@@ -22,8 +22,6 @@ dependencies {
   implementation("org.jetbrains.kotlin:kotlin-reflect:2.1.0-Beta1")
   implementation("com.sksamuel.hoplite:hoplite-core:2.8.0")
   implementation("com.squareup.retrofit2:retrofit:2.11.0")
-  implementation("org.slf4j:slf4j-api:2.0.16")
-  implementation("ch.qos.logback:logback-classic:1.5.15")
   testImplementation("com.google.truth:truth:1.4.4")
   testImplementation("io.mockk:mockk:1.13.12")
   testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")

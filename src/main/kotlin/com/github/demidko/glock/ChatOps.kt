@@ -6,7 +6,6 @@ import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
 import org.apache.commons.collections4.QueueUtils.synchronizedQueue
 import org.apache.commons.collections4.queue.CircularFifoQueue
-import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Duration.ofSeconds
 import java.time.Instant.now
@@ -28,43 +27,6 @@ class ChatOps(
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId
 ) {
-
-  init {
-    val log = LoggerFactory.getLogger(javaClass)
-    val chat = bot.getChat(chatId).getOrNull()
-    if (chat == null) {
-      log.warn("Chat $chatId cannot be displayed")
-    } else {
-      val info =
-        buildString {
-          with(chat) {
-            append("id").append(id).append(' ')
-            if (firstName != null) {
-              append(firstName).append(' ')
-            }
-            if (lastName != null) {
-              append(lastName).append(' ')
-            }
-            if (username != null) {
-              append('@').append(username).append(' ')
-            }
-            if (inviteLink != null) {
-              append(inviteLink).append(' ')
-            }
-            if (bio != null) {
-              appendLine(bio)
-            }
-            if (description != null) {
-              appendLine(description)
-            }
-            if (pinnedMessage != null) {
-              appendLine(pinnedMessage)
-            }
-          }
-        }
-      log.info(info)
-    }
-  }
 
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
   private val recentMessages = synchronizedQueue(CircularFifoQueue<Message>(12))
