@@ -11,6 +11,7 @@ import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
+import com.github.kotlintelegrambot.entities.User
 import java.lang.Thread.startVirtualThread
 import java.time.Duration
 import java.time.Duration.ofDays
@@ -46,7 +47,7 @@ class GlockBot(
         message(handleMessage(ChatOps::tryProcessStatuette))
         text {
           if (message.chat.id != -1002388072333) {
-            println(text)
+            println("${format(message.chat)}${format(message.from)} - $text")
           }
         }
       }
@@ -64,7 +65,7 @@ class GlockBot(
 
   private fun getChatOps(chat: Chat): ChatOps {
     return idToChatOps.computeIfAbsent(chat.id) {
-      display(chat)
+      println("I - detected new chat ${format(chat)}")
       ChatOps(
         bot,
         fromId(chat.id),
@@ -115,34 +116,50 @@ class GlockBot(
     }
   }
 
-  private fun display(chat: Chat) {
-    val info =
-      buildString {
-        with(chat) {
-          append("new chat id ").append(id).append(' ')
-          if (firstName != null) {
-            append(firstName).append(' ')
-          }
-          if (lastName != null) {
-            append(lastName).append(' ')
-          }
-          if (username != null) {
-            append('@').append(username).append(' ')
-          }
-          if (inviteLink != null) {
-            append(inviteLink).append(' ')
-          }
-          if (bio != null) {
-            appendLine(bio).appendLine("***")
-          }
-          if (description != null) {
-            appendLine(description).appendLine("***")
-          }
-          if (pinnedMessage != null) {
-            appendLine(pinnedMessage).appendLine("***")
-          }
+  private fun format(user: User?): String {
+    if (user == null) {
+      return ""
+    }
+    return buildString {
+      with(user) {
+        append("id ").append(id).append(' ')
+        append(firstName).append(' ')
+        if (lastName != null) {
+          append(lastName).append(' ')
+        }
+        if (username != null) {
+          append('@').append(username).append(' ')
         }
       }
-    println(info)
+    }
+  }
+
+  private fun format(chat: Chat): String {
+    return buildString {
+      with(chat) {
+        append("id ").append(id).append(' ')
+        if (firstName != null) {
+          append(firstName).append(' ')
+        }
+        if (lastName != null) {
+          append(lastName).append(' ')
+        }
+        if (username != null) {
+          append('@').append(username).append(' ')
+        }
+        if (inviteLink != null) {
+          append(inviteLink).append(' ')
+        }
+        if (bio != null) {
+          append(bio).append(" - ")
+        }
+        if (description != null) {
+          append(description).append(" - ")
+        }
+        if (pinnedMessage != null) {
+          append(pinnedMessage).append(" - ")
+        }
+      }
+    }
   }
 }
