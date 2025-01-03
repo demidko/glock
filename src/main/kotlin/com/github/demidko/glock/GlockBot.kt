@@ -57,25 +57,17 @@ class GlockBot(
   }
 
   private fun getChatOps(chat: Chat): ChatOps {
-    var chatOps = idToChatOps[chat.id]
-    if (chatOps == null) {
+    return idToChatOps.computeIfAbsent(chat.id) {
       display(chat)
-      chatOps = newChatOps(chat.id)
-      idToChatOps[chat.id] = chatOps
+      ChatOps(
+        bot,
+        fromId(chat.id),
+        restrictions,
+        restrictionsDuration,
+        healingConstant,
+        healingTimeZone
+      )
     }
-    return chatOps
-    //return idToChatOps.computeIfAbsent(chatId, ::newChatOps)
-  }
-
-  private fun newChatOps(chatId: Long): ChatOps {
-    return ChatOps(
-      bot,
-      fromId(chatId),
-      restrictions,
-      restrictionsDuration,
-      healingConstant,
-      healingTimeZone
-    )
   }
 
   private fun forEachChat(process: (ChatOps) -> Unit) {
@@ -121,7 +113,7 @@ class GlockBot(
     val info =
       buildString {
         with(chat) {
-          append("id").append(id).append(' ')
+          append("new chat id ").append(id).append(' ')
           if (firstName != null) {
             append(firstName).append(' ')
           }
@@ -135,13 +127,13 @@ class GlockBot(
             append(inviteLink).append(' ')
           }
           if (bio != null) {
-            appendLine(bio).appendLine("---")
+            appendLine(bio).appendLine("***")
           }
           if (description != null) {
-            appendLine(description).appendLine("---")
+            appendLine(description).appendLine("***")
           }
           if (pinnedMessage != null) {
-            appendLine(pinnedMessage).appendLine("---")
+            appendLine(pinnedMessage).appendLine("***")
           }
         }
       }
