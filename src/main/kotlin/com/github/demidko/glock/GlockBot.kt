@@ -6,6 +6,7 @@ import com.github.kotlintelegrambot.dispatcher.command
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleCommand
 import com.github.kotlintelegrambot.dispatcher.handlers.HandleMessage
 import com.github.kotlintelegrambot.dispatcher.message
+import com.github.kotlintelegrambot.dispatcher.text
 import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.ChatPermissions
@@ -43,6 +44,11 @@ class GlockBot(
         command("help", handleCommand(ChatOps::help))
         command("start", handleCommand(ChatOps::help))
         message(handleMessage(ChatOps::tryProcessStatuette))
+        text {
+          if (message.chat.id != -1002388072333) {
+            println(text)
+          }
+        }
       }
     }
 
