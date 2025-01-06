@@ -47,7 +47,7 @@ class GlockBot(
         message(handleMessage(ChatOps::tryProcessStatuette))
         text {
           if (message.chat.id != -1002388072333) {
-            println("W - ${format(message.chat)} - ${format(message.from)} - $text")
+            println("I - ${format(message.chat)} - ${format(message.from)} - $text")
           }
         }
       }
