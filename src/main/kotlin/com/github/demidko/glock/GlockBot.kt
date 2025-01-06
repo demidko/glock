@@ -131,8 +131,7 @@ class GlockBot(
           append('@').append(username).append(' ')
         }
       }
-      trimEnd(' ')
-    }
+    }.trimEnd()
   }
 
   private fun format(chat: Chat): String {
@@ -151,17 +150,16 @@ class GlockBot(
         if (inviteLink != null) {
           append(inviteLink).append(' ')
         }
-        if (bio != null) {
+        if (bio?.isNotBlank() == true) {
           append(bio).append(" - ")
         }
-        if (description != null) {
+        if (description?.isNotBlank() == true) {
           append(description).append(" - ")
         }
-        if (pinnedMessage != null) {
+        if (pinnedMessage?.isNotBlank() == true) {
           append(pinnedMessage).append(" - ")
         }
       }
-      trimEnd(' ', '-')
-    }
+    }.trimEnd(' ', '-')
   }
 }
