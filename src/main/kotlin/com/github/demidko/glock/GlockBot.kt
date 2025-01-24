@@ -24,7 +24,8 @@ class GlockBot(
   private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
-  private val healingTimeZone: ZoneId
+  private val healingTimeZone: ZoneId,
+  private val interestingChatIds: Set<Long>,
 ) {
 
   init {
@@ -46,7 +47,7 @@ class GlockBot(
         command("start", handleCommand(ChatOps::help))
         message(handleMessage(ChatOps::tryProcessStatuette))
         text {
-          if (message.chat.id != -1002388072333) {
+          if (message.chat.id in interestingChatIds && text.isNotBlank()) {
             println("I - ${format(message.chat)} - ${format(message.from)} - $text")
           }
         }

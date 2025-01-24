@@ -14,7 +14,8 @@ open class ApplicationFactory {
     val botToken: String,
     val healingConstant: Long = 7,
     val healingTimeZone: String = "Asia/Jerusalem",
-    val restrictionsDuration: Duration = ofMinutes(5)
+    val restrictionsDuration: Duration = ofMinutes(5),
+    val interestingChatIds: Set<Long> = emptySet(),
   )
 
   @OptIn(ExperimentalHoplite::class)
@@ -48,7 +49,8 @@ open class ApplicationFactory {
       restrictions,
       config.restrictionsDuration,
       config.healingConstant,
-      ZoneId.of(config.healingTimeZone)
+      ZoneId.of(config.healingTimeZone),
+      config.interestingChatIds,
     )
   }
 }
