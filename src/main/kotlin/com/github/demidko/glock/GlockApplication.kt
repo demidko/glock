@@ -13,8 +13,7 @@ fun main(args: Array<String>) {
 private fun startLoopWithFixedRate(every: Duration, action: () -> Unit) {
   startVirtualThread {
     while (interrupted().not()) {
-      sleep(every)
-      action()
+      sleep(every); action()
     }
   }
 }
