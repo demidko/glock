@@ -3,9 +3,15 @@ package com.github.demidko.glock
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.entities.ChatId
 import com.github.kotlintelegrambot.entities.ChatPermissions
+import com.github.kotlintelegrambot.entities.LinkPreviewOptions
 import com.github.kotlintelegrambot.entities.Message
+import com.github.kotlintelegrambot.entities.ParseMode.HTML
+import com.github.kotlintelegrambot.entities.ReplyParameters
+import com.github.kotlintelegrambot.types.TelegramBotResult.Error.Unknown
 import org.apache.commons.collections4.QueueUtils.synchronizedQueue
 import org.apache.commons.collections4.queue.CircularFifoQueue
+import java.lang.System.Logger.Level.WARNING
+import java.lang.System.getLogger
 import java.time.Duration
 import java.time.Duration.ofSeconds
 import java.time.Instant.now
@@ -29,9 +35,12 @@ class ChatOps(
   private val senderChatBans: SenderChatBans
 ) {
 
+  private val logger = getLogger(ChatOps::class.java.name)
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
   private val recentMessages = synchronizedQueue(CircularFifoQueue<Message>(12))
-  private val statuettes = ConcurrentLinkedQueue<Long>()
+  private val statuettes = ConcurrentLinkedQueue<Statuette>()
+
+  private data class Statuette(val messageId: Long, val gunfighter: Message)
 
   fun cleanTempMessages() {
     val tempMessagesCount = messagesToLifetimes.mappingCount()
@@ -101,7 +110,7 @@ class ChatOps(
   fun statuette(gunfighterMessage: Message) {
     val statuetteId = reply(gunfighterMessage, "🗿", Persistent)
     if (statuetteId != null) {
-      statuettes += statuetteId
+      statuettes += Statuette(statuetteId, gunfighterMessage)
     }
     markAsTemp(gunfighterMessage)
   }
@@ -112,8 +121,8 @@ class ChatOps(
       recentMessages += message
       return
     }
-    bot.deleteMessage(chatId, statuette)
-    hurt(message, restrictionsDuration.seconds, "💥")
+    bot.deleteMessage(chatId, statuette.messageId)
+    hurt(statuette.gunfighter, message, restrictionsDuration.seconds, "💥")
   }
 
   fun buckshot(gunfighterMessage: Message) {
@@ -125,7 +134,7 @@ class ChatOps(
     }
     val emoji = setOf("💥", "🗯️", "⚡️")
     if (targetMessages.size == 1) {
-      hurt(targetMessages.random(), restrictionsDuration.seconds, emoji.random())
+      hurt(gunfighterMessage, targetMessages.random(), restrictionsDuration.seconds, emoji.random())
       markAsTemp(gunfighterMessage)
       return
     }
@@ -133,7 +142,7 @@ class ChatOps(
     for (t in 1..targetsCount) {
       val target = targetMessages.random()
       val restrictionsDurationSec = nextLong(45, restrictionsDuration.seconds * 2 + 1)
-      hurt(target, restrictionsDurationSec, emoji.random())
+      hurt(gunfighterMessage, target, restrictionsDurationSec, emoji.random())
     }
     markAsTemp(gunfighterMessage)
   }
@@ -144,7 +153,7 @@ class ChatOps(
       markAsTemp(gunfighterMessage)
       return
     }
-    hurt(target, restrictionsDuration.seconds, "💥")
+    hurt(gunfighterMessage, target, restrictionsDuration.seconds, "💥")
     markAsTemp(gunfighterMessage)
   }
 
@@ -155,7 +164,7 @@ class ChatOps(
     }
   }
 
-  private fun hurt(target: Message, restrictionsDurationSec: Long, emoji: String) {
+  private fun hurt(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String) {
     val senderChat = target.senderChat
     if (senderChat != null) {
       if (senderChat.type != "channel" || !senderChatBans.ban(target.chat.id, senderChat.id, restrictionsDurationSec)) {
@@ -164,9 +173,60 @@ class ChatOps(
     } else {
       val userId = target.from?.id ?: return
       val untilEpochSecond = epochSecond(userId) + restrictionsDurationSec
-      bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
+      val (response, exception) = bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
+      if (exception != null) {
+        logger.log(WARNING, "Failed to restrict user $userId", exception)
+        return
+      }
+      val body = response?.body()
+      if (response?.isSuccessful != true || body?.ok != true || body.result != true) {
+        logger.log(WARNING, "Failed to restrict user $userId: HTTP ${response?.code()}, ${body?.errorDescription}")
+        return
+      }
     }
-    reply(target, emoji)
+    val duration = "${restrictionsDurationSec / 60}:${(restrictionsDurationSec % 60).toString().padStart(2, '0')}"
+    val text = "$emoji ${mention(gunfighter)} → ${mention(target)} · +$duration"
+    bot.sendMessage(
+      chatId,
+      text,
+      parseMode = HTML,
+      linkPreviewOptions = LinkPreviewOptions(isDisabled = true),
+      disableNotification = true,
+      messageThreadId = target.messageThreadId
+    ).onError {
+      if (it is Unknown) {
+        logger.log(WARNING, "Failed to send ban log", it.exception)
+      } else {
+        logger.log(WARNING, "Failed to send ban log: $it")
+      }
+    }
+  }
+
+  private fun mention(message: Message): String {
+    val senderChat = message.senderChat
+    if (senderChat != null) {
+      val username = senderChat.username?.takeIf(String::isNotBlank)
+      if (username != null) {
+        return link("https://t.me/$username", "@$username")
+      }
+      val title = senderChat.title?.takeIf(String::isNotBlank)
+      return escapeHtml(title?.let { "$it (${senderChat.id})" } ?: senderChat.id.toString())
+    }
+    val user = message.from ?: return "?"
+    val name = listOfNotNull(user.firstName, user.lastName).filter(String::isNotBlank).joinToString(" ")
+    val label = user.username?.takeIf(String::isNotBlank)?.let { "@$it" }
+      ?: name.takeIf(String::isNotBlank)
+      ?: user.id.toString()
+    return link("tg://user?id=${user.id}", label)
+  }
+
+  private fun link(url: String, label: String): String {
+    return "<a href=\"${escapeHtml(url)}\">${escapeHtml(label)}</a>"
+  }
+
+  private fun escapeHtml(text: String): String {
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+      .replace('\n', ' ').replace('\r', ' ')
   }
 
   private fun senderId(message: Message): Long? {
@@ -194,7 +254,9 @@ class ChatOps(
   private fun reply(to: Message, emoji: String, lifetime: ReplyLifetime = Temp(ofSeconds(3))): Long? {
     val message =
       try {
-        bot.sendMessage(chatId, emoji, replyToMessageId = to.messageId, disableNotification = true).get()
+        bot.sendMessage(
+          chatId, emoji, replyParameters = ReplyParameters(to.messageId), disableNotification = true
+        ).get()
       } catch (e: IllegalStateException) {
         return null
       }

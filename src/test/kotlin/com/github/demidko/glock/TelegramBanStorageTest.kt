@@ -2,11 +2,13 @@ package com.github.demidko.glock
 
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.entities.Chat
+import com.github.kotlintelegrambot.entities.ChatFullInfo
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.Message
 import com.github.kotlintelegrambot.entities.TelegramFile
 import com.github.kotlintelegrambot.entities.TelegramFile.ByByteArray
 import com.github.kotlintelegrambot.entities.files.Document
+import com.github.kotlintelegrambot.entities.gifts.AcceptedGiftTypes
 import com.github.kotlintelegrambot.network.Response
 import com.github.kotlintelegrambot.types.TelegramBotResult.Success
 import com.google.common.truth.Truth.assertThat
@@ -134,7 +136,16 @@ class TelegramBanStorageTest {
 
     init {
       every { bot.getChat(channelId) } answers {
-        Success(Chat(id = -100900, type = "channel", description = description))
+        Success(
+          ChatFullInfo(
+            id = -100900,
+            type = "channel",
+            accentColorId = 0,
+            maxReactionCount = 0,
+            acceptedGiftTypes = AcceptedGiftTypes(false, false, false, false),
+            description = description
+          )
+        )
       }
       every { bot.downloadFileBytes(any()) } answers {
         val fileId = firstArg<String>()

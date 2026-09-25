@@ -2,8 +2,8 @@ import org.gradle.api.JavaVersion.VERSION_21
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
 
 plugins {
-  kotlin("jvm") version "2.1.20-Beta1"
-  kotlin("plugin.serialization") version "2.1.20-Beta1"
+  kotlin("jvm") version "2.3.21"
+  kotlin("plugin.serialization") version "2.3.21"
   application
 }
 
@@ -15,12 +15,18 @@ repositories {
   maven("https://jitpack.io")
 }
 
+val telegramStorageSources by configurations.creating {
+  isTransitive = false
+}
+
 dependencies {
   implementation("com.github.demidko:telegram-storage:2025.03.20")
+  telegramStorageSources("com.github.demidko:telegram-storage:2025.03.20:sources")
+  implementation("com.google.guava:guava:33.4.0-jre")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.8.0")
   implementation("org.apache.commons:commons-collections4:4.4")
-  implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.3.0")
-  implementation("org.jetbrains.kotlin:kotlin-reflect:2.1.0-Beta1")
+  implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:10.0.0")
+  implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.21")
   implementation("com.sksamuel.hoplite:hoplite-core:2.8.0")
   implementation("com.squareup.retrofit2:retrofit:2.11.0")
   implementation("com.squareup.retrofit2:converter-gson:2.11.0")
@@ -29,6 +35,21 @@ dependencies {
   testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")
   testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
   testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.0")
+}
+
+// Recompile the published storage sources against API 10; its API 6 binary is incompatible.
+val unpackTelegramStorage by tasks.registering(Sync::class) {
+  from(telegramStorageSources.map { zipTree(it) })
+  include("**/*.kt")
+  into(layout.buildDirectory.dir("generated/telegram-storage"))
+}
+
+kotlin.sourceSets.main {
+  kotlin.srcDir(unpackTelegramStorage)
+}
+
+configurations.matching { it.name in setOf("runtimeClasspath", "testRuntimeClasspath") }.configureEach {
+  exclude(group = "com.github.demidko", module = "telegram-storage")
 }
 
 application {

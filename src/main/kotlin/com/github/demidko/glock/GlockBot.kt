@@ -153,18 +153,6 @@ class GlockBot(
         if (username != null) {
           append('@').append(username).append(' ')
         }
-        if (inviteLink != null) {
-          append(inviteLink).append(' ')
-        }
-        if (bio?.isNotBlank() == true) {
-          append(bio).append(" - ")
-        }
-        if (description?.isNotBlank() == true) {
-          append(description).append(" - ")
-        }
-        if (pinnedMessage?.isNotBlank() == true) {
-          append(pinnedMessage).append(" - ")
-        }
       }
     }.trimEnd(' ', '-')
   }
