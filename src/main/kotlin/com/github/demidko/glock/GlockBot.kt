@@ -26,6 +26,7 @@ class GlockBot(
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId,
   private val boringChatIds: Set<Long>,
+  storageChannelId: Long,
 ) {
 
   init {
@@ -54,9 +55,12 @@ class GlockBot(
       }
     }
 
+  private val senderChatBans = SenderChatBans(SenderChatApi(apiKey), TelegramBanStorage(bot, fromId(storageChannelId)))
+
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
   fun cleanTempMessages() {
+    senderChatBans.unbanExpired()
     forEachChat(ChatOps::cleanTempMessages)
   }
 
@@ -73,7 +77,8 @@ class GlockBot(
         restrictions,
         restrictionsDuration,
         healingConstant,
-        healingTimeZone
+        healingTimeZone,
+        senderChatBans
       )
     }
   }

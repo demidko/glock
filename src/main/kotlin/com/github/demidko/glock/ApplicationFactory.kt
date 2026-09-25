@@ -12,6 +12,7 @@ import kotlin.time.toKotlinDuration
 open class ApplicationFactory {
   data class Config(
     val botToken: String,
+    val storageChannelId: Long,
     val healingConstant: Long = 7,
     val healingTimeZone: String = "Asia/Jerusalem",
     val restrictionsDuration: Duration = ofMinutes(5),
@@ -51,6 +52,7 @@ open class ApplicationFactory {
       config.healingConstant,
       ZoneId.of(config.healingTimeZone),
       config.boringChatIds,
+      config.storageChannelId,
     )
   }
 }

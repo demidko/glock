@@ -25,7 +25,8 @@ class ChatOps(
   private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
-  private val healingTimeZone: ZoneId
+  private val healingTimeZone: ZoneId,
+  private val senderChatBans: SenderChatBans
 ) {
 
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
@@ -49,24 +50,35 @@ class ChatOps(
 
   fun heal(healerMessage: Message, args: List<String>) {
     val target = healerMessage.replyToMessage ?: return
-    val targetId = target.from?.id ?: return
+    val targetId = senderId(target) ?: return
+    val senderChat = target.senderChat
+    if (senderChat != null && senderChat.type != "channel") {
+      return
+    }
     val magicCode = extractMagicCode(args) ?: return
     if (!isHealingCode(magicCode)) {
       markAsTemp(healerMessage)
       return
     }
-    bot.restrictChatMember(
-      chatId, targetId, ChatPermissions(
-        canSendMessages = true,
-        canSendMediaMessages = true,
-        canSendPolls = true,
-        canSendOtherMessages = true,
-        canAddWebPagePreviews = true,
-        canChangeInfo = true,
-        canInviteUsers = true,
-        canPinMessages = true
+    if (senderChat != null) {
+      if (!senderChatBans.unban(target.chat.id, targetId)) {
+        markAsTemp(healerMessage)
+        return
+      }
+    } else {
+      bot.restrictChatMember(
+        chatId, targetId, ChatPermissions(
+          canSendMessages = true,
+          canSendMediaMessages = true,
+          canSendPolls = true,
+          canSendOtherMessages = true,
+          canAddWebPagePreviews = true,
+          canChangeInfo = true,
+          canInviteUsers = true,
+          canPinMessages = true
+        )
       )
-    )
+    }
     val emoji = setOf("💊", "💉", "🚑")
     reply(target, emoji.random())
     markAsTemp(healerMessage)
@@ -105,8 +117,8 @@ class ChatOps(
   }
 
   fun buckshot(gunfighterMessage: Message) {
-    val gunfighterId = gunfighterMessage.from?.id ?: return
-    val targetMessages = recentMessages.filter { it.from?.id != gunfighterId }
+    val gunfighterId = senderId(gunfighterMessage) ?: return
+    val targetMessages = recentMessages.filter { senderId(it) != gunfighterId }
     if (targetMessages.isEmpty()) {
       markAsTemp(gunfighterMessage)
       return
@@ -144,10 +156,21 @@ class ChatOps(
   }
 
   private fun hurt(target: Message, restrictionsDurationSec: Long, emoji: String) {
-    val userId = target.from?.id ?: return
-    val untilEpochSecond = epochSecond(userId) + restrictionsDurationSec
-    bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
+    val senderChat = target.senderChat
+    if (senderChat != null) {
+      if (senderChat.type != "channel" || !senderChatBans.ban(target.chat.id, senderChat.id, restrictionsDurationSec)) {
+        return
+      }
+    } else {
+      val userId = target.from?.id ?: return
+      val untilEpochSecond = epochSecond(userId) + restrictionsDurationSec
+      bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
+    }
     reply(target, emoji)
+  }
+
+  private fun senderId(message: Message): Long? {
+    return message.senderChat?.id ?: message.from?.id
   }
 
   private fun epochSecond(userId: Long): Long {
