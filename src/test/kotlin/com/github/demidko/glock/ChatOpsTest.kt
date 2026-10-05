@@ -28,6 +28,9 @@ import java.io.IOException
 import java.lang.Thread.sleep
 import java.time.Duration.ofSeconds
 import java.time.ZoneOffset.UTC
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicLong
 
 class ChatOpsTest {
 
@@ -388,6 +391,69 @@ class ChatOpsTest {
       val (minutes, remainingSeconds) = log.substringAfterLast('+').split(':').map(String::toLong)
       assertThat(minutes * 60 + remainingSeconds).isEqualTo(seconds)
     }
+  }
+
+  @Test
+  fun `queued shots preserve both additions to an ordinary user's restriction`() {
+    val initialDeadline = 2_000_000_000L
+    val deadline = AtomicLong(initialDeadline)
+    val firstRead = CountDownLatch(1)
+    val releaseFirstRead = CountDownLatch(1)
+    val completed = CountDownLatch(2)
+    every { bot.getChatMember(chatId, user.id) } answers {
+      val previous = deadline.get()
+      firstRead.countDown()
+      check(releaseFirstRead.await(5, SECONDS))
+      Success(ChatMember(user, "restricted", untilDate = previous.toInt()))
+    }
+    every { bot.restrictChatMember(chatId, user.id, restrictions, any()) } answers {
+      deadline.set(arg<Long>(3))
+      success<Response<Boolean>?>(Response(true, true)) to null
+    }
+
+    ChatTaskDispatcher().use { dispatcher ->
+      try {
+        dispatcher.execute(chat.id) {
+          try { chatOps.shoot(replyingTo(message(1, from = user))) }
+          finally { completed.countDown() }
+        }
+        assertThat(firstRead.await(5, SECONDS)).isTrue()
+        dispatcher.execute(chat.id) {
+          try { chatOps.shoot(replyingTo(message(2, from = user))) }
+          finally { completed.countDown() }
+        }
+      } finally {
+        releaseFirstRead.countDown()
+      }
+      assertThat(completed.await(5, SECONDS)).isTrue()
+    }
+
+    assertThat(deadline.get()).isEqualTo(initialDeadline + 2 * duration.seconds)
+    verify(exactly = 2) { bot.restrictChatMember(chatId, user.id, restrictions, any()) }
+  }
+
+  @Test
+  fun `queued statuette command hits the next message rather than its placement message`() {
+    val placement = message(1, from = gunfighter)
+    val target = message(2, from = user)
+    allowUserRestriction()
+    every { bot.deleteMessage(chatId, 999) } returns Success(true)
+    val completed = CountDownLatch(1)
+
+    ChatTaskDispatcher().use { dispatcher ->
+      // The generic message handler is registered before command handlers in GlockBot.
+      dispatcher.execute(chat.id) { chatOps.tryProcessStatuette(placement) }
+      dispatcher.execute(chat.id) { chatOps.statuette(placement) }
+      dispatcher.execute(chat.id) {
+        try { chatOps.tryProcessStatuette(target) }
+        finally { completed.countDown() }
+      }
+      assertThat(completed.await(5, SECONDS)).isTrue()
+    }
+
+    verify(exactly = 1) { bot.restrictChatMember(chatId, user.id, restrictions, any()) }
+    verify(exactly = 0) { bot.restrictChatMember(chatId, gunfighter.id, any(), any()) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
   }
 
   private fun allowUserRestriction(victim: User = user) {
