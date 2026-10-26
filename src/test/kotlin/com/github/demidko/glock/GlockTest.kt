@@ -108,7 +108,9 @@ class GlockTest {
     assertThat(line).doesNotContain("@hunter</a> 🤐")
     assertThat(tg.restricted.map { it.userId }.toSet()).isEqualTo(line.split(" · ").map { if ("@victim" in it) 11L else 33L }.toSet())
     assertThat(tg.restricted.none { it.userId == 22L }).isTrue()
-    assertThat(tg.restricted.all { it.until - now in 60..600 || it.until - now in 120..1_200 }).isTrue()
+    // Two to four pellets of 60..600 seconds each may land on the same victim and stack.
+    assertThat(tg.restricted.all { it.until - now in 60..2_400 }).isTrue()
+    assertThat(tg.restricted.size).isIn(2..4)
   }
 
   @Test
