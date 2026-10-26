@@ -2,7 +2,6 @@ package com.github.demidko.glock
 
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.entities.ChatId
-import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.LinkPreviewOptions
 import com.github.kotlintelegrambot.entities.Message
 import com.github.kotlintelegrambot.entities.ParseMode.HTML
@@ -28,11 +27,11 @@ import kotlin.random.Random.Default.nextLong
 class ChatOps(
   private val bot: Bot,
   private val chatId: ChatId,
-  private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId,
-  private val senderChatBans: SenderChatBans
+  private val senderChatBans: SenderChatBans,
+  private val userRestrictions: UserRestrictions
 ) {
 
   private val logger = getLogger(ChatOps::class.java.name)
@@ -75,18 +74,10 @@ class ChatOps(
         return
       }
     } else {
-      bot.restrictChatMember(
-        chatId, targetId, ChatPermissions(
-          canSendMessages = true,
-          canSendMediaMessages = true,
-          canSendPolls = true,
-          canSendOtherMessages = true,
-          canAddWebPagePreviews = true,
-          canChangeInfo = true,
-          canInviteUsers = true,
-          canPinMessages = true
-        )
-      )
+      if (!userRestrictions.heal(target.chat.id, targetId)) {
+        markAsTemp(healerMessage)
+        return
+      }
     }
     val emoji = setOf("💊", "💉", "🚑")
     reply(target, emoji.random())
@@ -94,7 +85,7 @@ class ChatOps(
   }
 
   private fun extractMagicCode(args: List<String>): Long? {
-    return args.singleOrNull()?.toLong()
+    return args.singleOrNull()?.toLongOrNull()
   }
 
   private fun isHealingCode(code: Long): Boolean {
@@ -141,7 +132,7 @@ class ChatOps(
     val targetsCount = nextInt(2, targetMessages.size + 1)
     for (t in 1..targetsCount) {
       val target = targetMessages.random()
-      val restrictionsDurationSec = nextLong(45, restrictionsDuration.seconds * 2 + 1)
+      val restrictionsDurationSec = nextLong(60, restrictionsDuration.seconds * 2 + 1)
       hurt(gunfighterMessage, target, restrictionsDurationSec, emoji.random())
     }
     markAsTemp(gunfighterMessage)
@@ -172,20 +163,16 @@ class ChatOps(
       }
     } else {
       val userId = target.from?.id ?: return
-      val untilEpochSecond = epochSecond(userId) + restrictionsDurationSec
-      val (response, exception) = bot.restrictChatMember(chatId, userId, restrictions, untilEpochSecond)
-      if (exception != null) {
-        logger.log(WARNING, "Failed to restrict user $userId", exception)
-        return
-      }
-      val body = response?.body()
-      if (response?.isSuccessful != true || body?.ok != true || body.result != true) {
-        logger.log(WARNING, "Failed to restrict user $userId: HTTP ${response?.code()}, ${body?.errorDescription}")
+      if (!userRestrictions.mute(target.chat.id, userId, restrictionsDurationSec)) {
         return
       }
     }
-    val duration = "${restrictionsDurationSec / 60}:${(restrictionsDurationSec % 60).toString().padStart(2, '0')}"
-    val text = "$emoji ${mention(gunfighter)} → ${mention(target)} · +$duration"
+    val remaining = if (senderChat != null) {
+      senderChatBans.remainingSeconds(target.chat.id, senderChat.id)
+    } else {
+      userRestrictions.remainingSeconds(target.chat.id, checkNotNull(target.from).id)
+    }
+    val text = "$emoji ${mention(gunfighter)} → ${mention(target)} — ${formatDuration(remaining)}"
     bot.sendMessage(
       chatId,
       text,
@@ -233,12 +220,18 @@ class ChatOps(
     return message.senderChat?.id ?: message.from?.id
   }
 
-  private fun epochSecond(userId: Long): Long {
-    val chatMember = bot.getChatMember(chatId, userId).getOrNull() ?: return now().epochSecond
-    if (chatMember.status == "restricted") {
-      return chatMember.untilDate?.toLong() ?: now().epochSecond
-    }
-    return now().epochSecond
+  private fun formatDuration(seconds: Long): String {
+    val remaining = seconds.coerceAtLeast(0)
+    val days = remaining / 86400
+    val hours = remaining % 86400 / 3600
+    val minutes = remaining % 3600 / 60
+    val rest = remaining % 60
+    return listOfNotNull(
+      days.takeIf { it > 0 }?.let { "${it}d" },
+      hours.takeIf { it > 0 }?.let { "${it}h" },
+      minutes.takeIf { it > 0 }?.let { "${it}m" },
+      rest.takeIf { it > 0 || remaining == 0L }?.let { "${it}s" }
+    ).joinToString(" ")
   }
 
   private fun isLifetimeExceeded(epochSecond: Long): Boolean {

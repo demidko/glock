@@ -228,6 +228,17 @@ class SenderChatBansTest {
   }
 
   @Test
+  fun `HTTP request timeout retains recovery because the ban may have applied`() {
+    every { api.ban(chatId, senderChatId) } returns HttpError(408, "Request timeout")
+
+    assertThat(bans().ban(chatId, senderChatId, 300)).isFalse()
+    now = 1_300
+    bans().unbanExpired()
+
+    verify(exactly = 1) { api.unban(chatId, senderChatId) }
+  }
+
+  @Test
   fun `timeout retains recovery deadline because Telegram may have applied the ban`() {
     every { api.ban(chatId, senderChatId) } returns Unknown(IOException("Timed out"))
 

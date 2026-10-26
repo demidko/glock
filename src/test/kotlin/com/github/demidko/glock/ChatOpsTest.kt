@@ -3,15 +3,12 @@ package com.github.demidko.glock
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
-import com.github.kotlintelegrambot.entities.ChatMember
-import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
 import com.github.kotlintelegrambot.entities.MessageOrigin
 import com.github.kotlintelegrambot.entities.LinkPreviewOptions
 import com.github.kotlintelegrambot.entities.ReplyParameters
 import com.github.kotlintelegrambot.entities.ParseMode.HTML
 import com.github.kotlintelegrambot.entities.User
-import com.github.kotlintelegrambot.network.Response
 import com.github.kotlintelegrambot.types.TelegramBotResult.Success
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.Unknown
 import com.google.common.truth.Truth.assertThat
@@ -21,9 +18,6 @@ import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import okhttp3.ResponseBody.create
-import retrofit2.Response.error
-import retrofit2.Response.success
 import java.io.IOException
 import java.lang.Thread.sleep
 import java.time.Duration.ofSeconds
@@ -41,22 +35,24 @@ class ChatOpsTest {
   private val user = User(id = 11, isBot = false, firstName = "User")
   private val gunfighter = User(id = 22, isBot = false, firstName = "Gunfighter", username = "gunfighter")
   private val fakeUser = User(id = 136817688, isBot = true, firstName = "Channel_Bot")
-  private val restrictions = ChatPermissions(canSendMessages = false)
   private val duration = ofSeconds(300)
   private val bot = mockk<Bot>()
   private val senderChatBans = mockk<SenderChatBans>()
+  private val userRestrictions = mockk<UserRestrictions>()
   private val chatOps = ChatOps(
     bot,
     chatId,
-    restrictions,
     duration,
     0,
     UTC,
-    senderChatBans
+    senderChatBans,
+    userRestrictions
   )
 
   @BeforeEach
   fun setUp() {
+    every { senderChatBans.remainingSeconds(chat.id, any()) } returns duration.seconds
+    every { userRestrictions.remainingSeconds(chat.id, any()) } returns duration.seconds
     every {
       bot.sendMessage(chatId, any(), replyParameters = any(), disableNotification = true)
     } returns Success(message(999))
@@ -160,23 +156,11 @@ class ChatOpsTest {
   @Test
   fun `heal restores an ordinary user's permissions`() {
     val target = message(1, from = user)
-    val permissions = ChatPermissions(
-      canSendMessages = true,
-      canSendMediaMessages = true,
-      canSendPolls = true,
-      canSendOtherMessages = true,
-      canAddWebPagePreviews = true,
-      canChangeInfo = true,
-      canInviteUsers = true,
-      canPinMessages = true
-    )
-    every {
-      bot.restrictChatMember(chatId, user.id, permissions)
-    } returns (success<Response<Boolean>?>(Response(result = true, ok = true)) to null)
+    every { userRestrictions.heal(chat.id, user.id) } returns true
 
     chatOps.heal(replyingTo(target), listOf("0"))
 
-    verify(exactly = 1) { bot.restrictChatMember(chatId, user.id, permissions) }
+    verify(exactly = 1) { userRestrictions.heal(chat.id, user.id) }
     verifyHealingReply(target)
     verify { senderChatBans wasNot Called }
   }
@@ -200,7 +184,7 @@ class ChatOpsTest {
           it.substringBefore(' ') in setOf("💥", "🗯️", "⚡️") &&
             it.substringAfter(' ') ==
             "<a href=\"https://t.me/channel_one\">@channel_one</a> → " +
-            "<a href=\"https://t.me/channel_two\">@channel_two</a> · +5:00"
+            "<a href=\"https://t.me/channel_two\">@channel_two</a> — 5m"
         },
         parseMode = HTML,
         linkPreviewOptions = LinkPreviewOptions(isDisabled = true),
@@ -245,7 +229,7 @@ class ChatOpsTest {
     verify(exactly = 1) { senderChatBans.ban(chat.id, channel.id, duration.seconds) }
     verifyBanLog(
       "💥 <a href=\"tg://user?id=11\">User</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> · +5:00"
+        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m"
     )
     verifyNoUserRestriction()
   }
@@ -260,7 +244,7 @@ class ChatOpsTest {
 
     verifyBanLog(
       "💥 <a href=\"tg://user?id=22\">Alex &lt;&amp;&gt; &quot;one&quot;</a> → " +
-        "<a href=\"tg://user?id=11\">Alex &lt;&amp;&gt; &quot;one&quot;</a> · +5:00"
+        "<a href=\"tg://user?id=11\">Alex &lt;&amp;&gt; &quot;one&quot;</a> — 5m"
     )
   }
 
@@ -273,7 +257,7 @@ class ChatOpsTest {
 
     verifyBanLog(
       "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"tg://user?id=11\">11</a> · +5:00"
+        "<a href=\"tg://user?id=11\">11</a> — 5m"
     )
   }
 
@@ -285,7 +269,7 @@ class ChatOpsTest {
     chatOps.shoot(replyingTo(message(1, from = fakeUser, senderChat = privateChannel)))
 
     verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → Private &lt;channel&gt; (-100101) · +5:00"
+      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → Private &lt;channel&gt; (-100101) — 5m"
     )
     verifyNoUserRestriction()
   }
@@ -299,8 +283,34 @@ class ChatOpsTest {
 
     verifyBanLog(
       "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> · +5:00",
+        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m",
       threadId = 77
+    )
+  }
+
+  @Test
+  fun `user hit log includes seconds in the total remaining duration`() {
+    allowUserRestriction()
+    every { userRestrictions.remainingSeconds(chat.id, user.id) } returns 330
+
+    chatOps.shoot(replyingTo(message(1, from = user)))
+
+    verifyBanLog(
+      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
+        "<a href=\"tg://user?id=11\">User</a> — 5m 30s"
+    )
+  }
+
+  @Test
+  fun `channel hit log shows total remaining duration instead of added duration`() {
+    every { senderChatBans.ban(chat.id, channel.id, duration.seconds) } returns true
+    every { senderChatBans.remainingSeconds(chat.id, channel.id) } returns 630
+
+    chatOps.shoot(replyingTo(message(1, senderChat = channel)))
+
+    verifyBanLog(
+      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
+        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 10m 30s"
     )
   }
 
@@ -318,36 +328,31 @@ class ChatOpsTest {
   }
 
   @Test
-  fun `HTTP failure restricting a user does not produce a ban log`() {
-    allowUserRestriction()
-    every { bot.restrictChatMember(chatId, user.id, restrictions, any()) } returns
-      (error<Response<Boolean>?>(403, create(null, "Forbidden")) to null)
+  fun `failed user restriction does not produce a ban log`() {
+    every { userRestrictions.mute(chat.id, user.id, duration.seconds) } returns false
 
     chatOps.shoot(replyingTo(message(1, from = user)))
 
     verifyNoBanLog()
+    verify(exactly = 0) { userRestrictions.remainingSeconds(any(), any()) }
   }
 
   @Test
-  fun `Telegram error restricting a user does not produce a ban log`() {
-    allowUserRestriction()
-    every { bot.restrictChatMember(chatId, user.id, restrictions, any()) } returns
-      (success<Response<Boolean>?>(Response(null, false, 400, "Not enough rights")) to null)
+  fun `failed user healing does not produce a healing reply`() {
+    every { userRestrictions.heal(chat.id, user.id) } returns false
 
-    chatOps.shoot(replyingTo(message(1, from = user)))
+    chatOps.heal(replyingTo(message(1, from = user)), listOf("0"))
 
-    verifyNoBanLog()
+    verify(exactly = 1) { userRestrictions.heal(chat.id, user.id) }
+    verify { bot wasNot Called }
   }
 
   @Test
-  fun `network error restricting a user does not produce a ban log`() {
-    allowUserRestriction()
-    every { bot.restrictChatMember(chatId, user.id, restrictions, any()) } returns
-      (null to IOException("Connection lost"))
+  fun `invalid healing code does not restore a user`() {
+    chatOps.heal(replyingTo(message(1, from = user)), listOf("1"))
 
-    chatOps.shoot(replyingTo(message(1, from = user)))
-
-    verifyNoBanLog()
+    verify { userRestrictions wasNot Called }
+    verify { bot wasNot Called }
   }
 
   @Test
@@ -366,12 +371,17 @@ class ChatOpsTest {
   }
 
   @Test
-  fun `multiple buckshot hits log the shooter and each added duration`() {
+  fun `multiple buckshot hits log the shooter and total remaining duration`() {
     val durations = mutableListOf<Long>()
     val logs = mutableListOf<String>()
+    var remaining = 0L
     chatOps.tryProcessStatuette(message(1, senderChat = otherChannel))
     chatOps.tryProcessStatuette(message(2, senderChat = otherChannel))
-    every { senderChatBans.ban(chat.id, otherChannel.id, capture(durations)) } returns true
+    every { senderChatBans.ban(chat.id, otherChannel.id, capture(durations)) } answers {
+      remaining += arg<Long>(2)
+      true
+    }
+    every { senderChatBans.remainingSeconds(chat.id, otherChannel.id) } answers { remaining }
     every {
       bot.sendMessage(
         chatId, capture(logs), parseMode = HTML,
@@ -383,33 +393,35 @@ class ChatOpsTest {
 
     assertThat(logs).hasSize(2)
     assertThat(durations).hasSize(2)
+    var expectedRemaining = 0L
     for ((log, seconds) in logs.zip(durations)) {
+      expectedRemaining += seconds
       assertThat(log).contains(
         "<a href=\"https://t.me/channel_one\">@channel_one</a> → " +
           "<a href=\"https://t.me/channel_two\">@channel_two</a>"
       )
-      val (minutes, remainingSeconds) = log.substringAfterLast('+').split(':').map(String::toLong)
-      assertThat(minutes * 60 + remainingSeconds).isEqualTo(seconds)
+      val match = Regex("(?:(\\d+)m)?(?: ?(\\d+)s)?").matchEntire(log.substringAfterLast(" — "))!!
+      val minutes = match.groupValues[1].toLongOrNull() ?: 0
+      val remainingSeconds = match.groupValues[2].toLongOrNull() ?: 0
+      assertThat(minutes * 60 + remainingSeconds).isEqualTo(expectedRemaining)
     }
   }
 
   @Test
   fun `queued shots preserve both additions to an ordinary user's restriction`() {
-    val initialDeadline = 2_000_000_000L
-    val deadline = AtomicLong(initialDeadline)
+    val initialRemaining = 300L
+    val remaining = AtomicLong(initialRemaining)
     val firstRead = CountDownLatch(1)
     val releaseFirstRead = CountDownLatch(1)
     val completed = CountDownLatch(2)
-    every { bot.getChatMember(chatId, user.id) } answers {
-      val previous = deadline.get()
+    every { userRestrictions.mute(chat.id, user.id, duration.seconds) } answers {
+      val previous = remaining.get()
       firstRead.countDown()
       check(releaseFirstRead.await(5, SECONDS))
-      Success(ChatMember(user, "restricted", untilDate = previous.toInt()))
+      remaining.set(previous + arg<Long>(2))
+      true
     }
-    every { bot.restrictChatMember(chatId, user.id, restrictions, any()) } answers {
-      deadline.set(arg<Long>(3))
-      success<Response<Boolean>?>(Response(true, true)) to null
-    }
+    every { userRestrictions.remainingSeconds(chat.id, user.id) } answers { remaining.get() }
 
     ChatTaskDispatcher().use { dispatcher ->
       try {
@@ -428,8 +440,8 @@ class ChatOpsTest {
       assertThat(completed.await(5, SECONDS)).isTrue()
     }
 
-    assertThat(deadline.get()).isEqualTo(initialDeadline + 2 * duration.seconds)
-    verify(exactly = 2) { bot.restrictChatMember(chatId, user.id, restrictions, any()) }
+    assertThat(remaining.get()).isEqualTo(initialRemaining + 2 * duration.seconds)
+    verify(exactly = 2) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
   }
 
   @Test
@@ -451,15 +463,13 @@ class ChatOpsTest {
       assertThat(completed.await(5, SECONDS)).isTrue()
     }
 
-    verify(exactly = 1) { bot.restrictChatMember(chatId, user.id, restrictions, any()) }
-    verify(exactly = 0) { bot.restrictChatMember(chatId, gunfighter.id, any(), any()) }
+    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
+    verify(exactly = 0) { userRestrictions.mute(chat.id, gunfighter.id, any()) }
     verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
   }
 
   private fun allowUserRestriction(victim: User = user) {
-    every { bot.getChatMember(chatId, victim.id) } returns Success(ChatMember(victim, "member"))
-    every { bot.restrictChatMember(chatId, victim.id, restrictions, any()) } returns
-      (success<Response<Boolean>?>(Response(true, true)) to null)
+    every { userRestrictions.mute(chat.id, victim.id, duration.seconds) } returns true
   }
 
   private fun verifyNoBanLog() {
@@ -480,27 +490,21 @@ class ChatOpsTest {
     verify(exactly = 1) { senderChatBans.ban(chat.id, channel.id, duration.seconds) }
     verifyBanLog(
       "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> · +5:00"
+        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m"
     )
     verifyNoUserRestriction()
   }
 
   private fun assertUserShot(target: Message) {
-    val previousUntilDate = 2_000_000_000
-    val untilDate = previousUntilDate + duration.seconds
-    every {
-      bot.getChatMember(chatId, user.id)
-    } returns Success(ChatMember(user, "restricted", untilDate = previousUntilDate))
-    every {
-      bot.restrictChatMember(chatId, user.id, restrictions, untilDate)
-    } returns (success<Response<Boolean>?>(Response(result = true, ok = true)) to null)
+    allowUserRestriction()
+    every { userRestrictions.remainingSeconds(chat.id, user.id) } returns 600
 
     chatOps.shoot(replyingTo(target))
 
-    verify(exactly = 1) { bot.restrictChatMember(chatId, user.id, restrictions, untilDate) }
+    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
     verifyBanLog(
       "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"tg://user?id=11\">User</a> · +5:00"
+        "<a href=\"tg://user?id=11\">User</a> — 10m"
     )
     verify { senderChatBans wasNot Called }
   }
@@ -528,8 +532,7 @@ class ChatOpsTest {
   }
 
   private fun verifyNoUserRestriction() {
-    verify(exactly = 0) { bot.getChatMember(any(), any()) }
-    verify(exactly = 0) { bot.restrictChatMember(any(), any(), any(), any()) }
+    verify { userRestrictions wasNot Called }
   }
 
   private fun verifyBanLog(text: String, threadId: Long? = null) {

@@ -19,6 +19,7 @@ import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
 import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.decodeFromByteArray
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -26,7 +27,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import retrofit2.Response.success
 import java.io.IOException
-import java.util.concurrent.ExecutionException
 
 @Suppress("UnstableApiUsage")
 class TelegramBanStorageTest {
@@ -66,7 +66,7 @@ class TelegramBanStorageTest {
   }
 
   @Test
-  fun `latest snapshot survives closing and reopening the published storage`() {
+  fun `latest snapshot survives reopening without a shutdown`() {
     val storage = openStorage()
     val first = mapOf("-10:-20" to 1000L)
     val second = mapOf("-10:-20" to 1300L, "-10:-30" to 1600L)
@@ -75,7 +75,6 @@ class TelegramBanStorageTest {
     assertThat(storage.load()).isEqualTo(first)
 
     storage.save(second)
-    storage.close()
     assertThat(openStorage().load()).isEqualTo(second)
   }
 
@@ -114,14 +113,81 @@ class TelegramBanStorageTest {
     storage.save(first)
     telegram.failUploads = true
 
-    assertThrows<ExecutionException> { storage.save(second) }
+    assertThrows<IOException> { storage.save(second) }
     assertThat(storage.load()).isEqualTo(first)
 
     telegram.failUploads = false
     storage.save(second)
-    storage.close()
     assertThat(openStorage().load()).isEqualTo(second)
   }
+
+  @Test
+  fun `legacy CBOR index and channel bans remain readable beside user snapshots`() {
+    val bans = mapOf("-10:-20" to 1300L)
+    telegram.seedLegacy(bans)
+    val storage = openStorage()
+    val users = mapOf("-10:11" to userRecord())
+
+    assertThat(storage.load()).isEqualTo(bans)
+    storage.saveUsers(users)
+    assertThat(openStorage().loadUsers()).isEqualTo(users)
+    assertThat(openStorage().load()).isEqualTo(bans)
+
+    storage.save(mapOf("-10:-30" to 1600L))
+    assertThat(openStorage().loadUsers()).isEqualTo(users)
+  }
+
+  @Test
+  fun `unreadable index fails closed instead of losing both registries`() {
+    openStorage().save(mapOf("-10:-20" to 1000L))
+    telegram.unavailableFiles.add(checkNotNull(telegram.description))
+
+    assertThrows<IllegalStateException> { openStorage().load() }
+    assertThrows<IllegalStateException> { openStorage().saveUsers(emptyMap()) }
+  }
+
+  @Test
+  fun `corrupt index becomes a controlled storage failure`() {
+    val storage = openStorage()
+    storage.save(mapOf("-10:-20" to 1000L))
+    telegram.corruptIndex()
+
+    assertThrows<IllegalStateException> { storage.load() }
+    assertThrows<IllegalStateException> { storage.saveUsers(emptyMap()) }
+  }
+
+  @Test
+  fun `publication failure keeps last committed index`() {
+    val storage = openStorage()
+    val bans = mapOf("-10:-20" to 1000L)
+    storage.save(bans)
+    telegram.failPublications = true
+
+    assertThrows<IOException> { storage.saveUsers(mapOf("-10:11" to userRecord())) }
+    assertThat(openStorage().load()).isEqualTo(bans)
+    assertThat(openStorage().loadUsers()).isEmpty()
+  }
+
+  @Test
+  fun `ambiguous publication is reread before updating the other registry`() {
+    val storage = openStorage()
+    val users = mapOf("-10:11" to userRecord())
+    telegram.failAfterPublication = true
+    assertThrows<IOException> { storage.saveUsers(users) }
+    telegram.failAfterPublication = false
+
+    storage.save(mapOf("-10:-20" to 1000L))
+
+    assertThat(openStorage().loadUsers()).isEqualTo(users)
+    assertThat(openStorage().load()).containsEntry("-10:-20", 1000L)
+  }
+
+  private fun userRecord() = UserRestrictionRecord(
+    originalState = UserMemberState("member", true, tag = "Member"),
+    originalPermissions = MemberPermissions(),
+    appliedPermissions = MemberPermissions(canSendMessages = false),
+    untilDate = 1300L
+  )
 
   private fun openStorage(): TelegramBanStorage {
     return TelegramBanStorage(telegram.bot, channelId).also(opened::add)
@@ -131,6 +197,8 @@ class TelegramBanStorageTest {
     val bot = mockk<Bot>()
     var description: String? = null
     var failUploads = false
+    var failPublications = false
+    var failAfterPublication = false
     val unavailableFiles = mutableSetOf<String>()
     private val files = mutableMapOf<String, ByteArray>()
 
@@ -166,9 +234,21 @@ class TelegramBanStorageTest {
         success<Response<Message>?>(Response(result = message, ok = true)) to null
       }
       every { bot.setChatDescription(channelId, any()) } answers {
+        if (failPublications) return@answers null to IOException("Publication failed")
         description = secondArg<String>()
+        if (failAfterPublication) return@answers null to IOException("Publication outcome unknown")
         success<Response<Boolean>?>(Response(result = true, ok = true)) to null
       }
+    }
+
+    fun corruptIndex() {
+      files[checkNotNull(description)] = byteArrayOf(0xff.toByte())
+    }
+
+    fun seedLegacy(bans: Map<String, Long>) {
+      files["legacy-value"] = Cbor.encodeToByteArray(bans)
+      files["legacy-index"] = Cbor.encodeToByteArray(mapOf("sender-chat-bans" to "legacy-value"))
+      description = "legacy-index"
     }
 
     fun snapshotFileId(): String {

@@ -10,22 +10,45 @@ also `/help`.
 Messages sent on behalf of channels can also be hit by `/shoot`, `/buckshot`, and `/statuette`, and healed with
 `/heal`. The bot needs administrator rights to restrict members. Anonymous group administrators cannot be targeted.
 
-Successful hits leave a short, silent log in the chat: `💥 @shooter → @target · +5:00`.
-The duration is the added mute time in minutes and seconds. User labels link to their Telegram IDs;
-public channel labels link to their usernames. Channels without a username are shown by title and ID.
-Statuette hits name the person who placed the statuette. Ban logs remain in the chat history.
+Successful hits leave a short, silent log in the chat: `💥 @shooter → @target — 5m`.
+The duration is the total remaining mute time, including earlier hits; seconds are shown when needed (`5m 30s`).
+User labels link to their Telegram IDs; public channel labels link to their usernames.
+Channels without a username are shown by title and ID. Statuette hits name the person who placed the statuette.
+Ban logs remain in the chat history.
 
-Telegram has no timed ban for channel senders, so the bot saves ban deadlines with
-[telegram-storage](https://github.com/demidko/telegram-storage) and removes the bans when they expire.
-Repeated hits extend the remaining time. Set `STORAGE_CHANNEL_ID` to the numeric ID of a dedicated private channel
-and give the bot full administrator rights there. Keep its description and stored files unchanged.
-The bot uses `com.github.demidko:telegram-storage:2025.03.20`; no persistent disk is needed.
-This version publishes its index in `close()`, called by the library's shutdown hook on a normal shutdown.
-Allow the bot to shut down gracefully during deployments; a forced stop can lose changes since the last published index.
-If the bot is offline when a channel's ban expires, it removes the ban after starting again.
-Telegram's channel ban prevents the channel owner from writing on behalf of any of their channels in that chat.
-See the [Telegram Bot API](https://core.telegram.org/bots/api#banchatsenderchat).
+Shots restrict only sending messages, media, polls, stickers and link previews. Reactions, member tag editing,
+invitations, pins, chat information and topic permissions retain their existing values. Tags themselves are never
+changed. Glock extends its own active mutes; it skips members already restricted by another administrator or by an
+older version without a saved record. The configured duration must be between 60 seconds and 366 days. Very slow
+storage operations can cause a shot to be skipped rather than accidentally creating a permanent restriction.
 
-The Telegram client is `telegram:10.0.0`. Since `telegram-storage:2025.03.20` was compiled against API 6,
-Gradle recompiles its unchanged published sources from JitPack against API 10 as part of the application.
-The incompatible storage binary is excluded from the runtime distribution. Its data format stays unchanged.
+With the healing code, `/heal` removes **any** individual restriction, including moderator restrictions and old
+Glock mutes. Members then inherit the group's current default permissions. The bot confirms healing only after
+Telegram confirms success. Automatic cleanup is conservative: it only releases a still-matching Glock restriction,
+so it does not intentionally overwrite a later moderator change. Telegram offers no atomic conditional update;
+a moderator change concurrent with the final request cannot be completely excluded.
+
+## Persistence
+
+Set `STORAGE_CHANNEL_ID` to the numeric ID of a dedicated private channel and give the bot full administrator rights
+there. Keep its description and stored files unchanged. No persistent local disk is needed. Run one Glock instance
+per storage channel. When upgrading from the old storage library, stop the old process completely before starting
+the new version: its shutdown hook can otherwise publish an outdated index.
+
+Both channel-ban deadlines and user restriction snapshots share a CBOR index in that channel. Each save uploads a
+snapshot and publishes the index before returning, including before a user restriction is applied. Failed or
+ambiguous requests retain enough information for reconciliation after a restart. Unreadable storage stops a write
+instead of silently creating an empty registry. The existing `telegram-storage:2025.03.20` index and channel-ban
+snapshots remain readable; the old library is no longer required, and saves no longer depend on graceful shutdown.
+
+Telegram expires ordinary user mutes even when the bot is offline. Channel senders have no timed ban in the Bot API,
+so Glock removes their saved bans when they expire, or after restarting if the deadline passed while offline.
+Repeated hits extend the remaining time. Telegram's channel ban prevents the channel owner from writing on behalf
+of any of their channels in that chat. See the [Telegram Bot API](https://core.telegram.org/bots/api#banchatsenderchat).
+
+## Build
+
+Use Java 21 and `./gradlew clean test installDist`. The wrapper pins Gradle 9.7.0; Kotlin is 2.4.21.
+Docker uses the same wrapper and Java 21 for both build and runtime, and runs tests before assembling the application.
+The Telegram client remains `telegram:10.0.0`, its latest release. A small HTTP adapter supplies the complete current
+permissions schema, including reactions and member tags, with independent permissions explicitly enabled.

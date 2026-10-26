@@ -39,7 +39,7 @@ class SenderChatBans(
       }
       return true
     }
-    if (result is TelegramApi || result is HttpError && result.httpCode in 400..499) {
+    if (result is TelegramApi || result is HttpError && result.httpCode in 400..499 && result.httpCode != 408) {
       deadlines = previous
       needsSave = !save(previous)
     }
@@ -57,6 +57,11 @@ class SenderChatBans(
       needsSave = !save(deadlines)
     }
     return true
+  }
+
+  @Synchronized
+  fun remainingSeconds(chatId: Long, senderChatId: Long): Long {
+    return ((deadlines["$chatId:$senderChatId"] ?: 0) - clock.instant().epochSecond).coerceAtLeast(0)
   }
 
   @Synchronized

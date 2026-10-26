@@ -2,8 +2,8 @@ import org.gradle.api.JavaVersion.VERSION_21
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
 
 plugins {
-  kotlin("jvm") version "2.3.21"
-  kotlin("plugin.serialization") version "2.3.21"
+  kotlin("jvm") version "2.4.21"
+  kotlin("plugin.serialization") version "2.4.21"
   application
 }
 
@@ -15,41 +15,22 @@ repositories {
   maven("https://jitpack.io")
 }
 
-val telegramStorageSources by configurations.creating {
-  isTransitive = false
-}
-
 dependencies {
-  implementation("com.github.demidko:telegram-storage:2025.03.20")
-  telegramStorageSources("com.github.demidko:telegram-storage:2025.03.20:sources")
-  implementation("com.google.guava:guava:33.4.0-jre")
-  implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.8.0")
-  implementation("org.apache.commons:commons-collections4:4.4")
+  implementation("com.google.guava:guava:33.7.2-jre")
+  implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.12.0")
+  implementation("org.apache.commons:commons-collections4:4.6.0")
   implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:10.0.0")
-  implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.21")
-  implementation("com.sksamuel.hoplite:hoplite-core:2.8.0")
-  implementation("com.squareup.retrofit2:retrofit:2.11.0")
-  implementation("com.squareup.retrofit2:converter-gson:2.11.0")
-  testImplementation("com.google.truth:truth:1.4.4")
-  testImplementation("io.mockk:mockk:1.13.12")
-  testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")
-  testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.0")
-}
-
-// Recompile the published storage sources against API 10; its API 6 binary is incompatible.
-val unpackTelegramStorage by tasks.registering(Sync::class) {
-  from(telegramStorageSources.map { zipTree(it) })
-  include("**/*.kt")
-  into(layout.buildDirectory.dir("generated/telegram-storage"))
-}
-
-kotlin.sourceSets.main {
-  kotlin.srcDir(unpackTelegramStorage)
-}
-
-configurations.matching { it.name in setOf("runtimeClasspath", "testRuntimeClasspath") }.configureEach {
-  exclude(group = "com.github.demidko", module = "telegram-storage")
+  implementation("org.jetbrains.kotlin:kotlin-reflect:2.4.21")
+  implementation("com.sksamuel.hoplite:hoplite-core:3.0.5")
+  implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.1"))
+  implementation("com.google.code.gson:gson:2.15.0")
+  implementation("com.squareup.retrofit2:retrofit:3.0.0")
+  implementation("com.squareup.retrofit2:converter-gson:3.0.0")
+  testImplementation("com.google.truth:truth:1.4.5")
+  testImplementation("io.mockk:mockk:1.14.11")
+  testImplementation("org.junit.jupiter:junit-jupiter-api:6.1.3")
+  testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:6.1.3")
+  testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 application {
@@ -58,6 +39,7 @@ application {
 }
 
 kotlin {
+  jvmToolchain(21)
   compilerOptions {
     jvmTarget = JVM_21
     freeCompilerArgs.addAll(

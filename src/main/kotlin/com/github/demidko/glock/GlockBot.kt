@@ -9,7 +9,6 @@ import com.github.kotlintelegrambot.dispatcher.message
 import com.github.kotlintelegrambot.dispatcher.text
 import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
-import com.github.kotlintelegrambot.entities.ChatPermissions
 import com.github.kotlintelegrambot.entities.Message
 import com.github.kotlintelegrambot.entities.User
 import java.time.Duration
@@ -20,18 +19,18 @@ import java.util.concurrent.ConcurrentHashMap
 
 class GlockBot(
   apiKey: String,
-  private val restrictions: ChatPermissions,
   private val restrictionsDuration: Duration,
   private val healingConstant: Long,
   private val healingTimeZone: ZoneId,
   private val boringChatIds: Set<Long>,
   storageChannelId: Long,
+  userRestrictionsOverride: UserRestrictions? = null,
 ) {
 
   init {
-    require(restrictionsDuration in ofSeconds(30)..ofDays(366)) {
-      "If user is restricted for more than 366 days or less than 30 seconds from the current time," +
-        " they are considered to be restricted forever"
+    require(restrictionsDuration in ofSeconds(60)..ofDays(366)) {
+      "Restriction duration must be between 60 seconds and 366 days; " +
+        "Telegram treats deadlines less than 30 seconds away as permanent"
     }
   }
 
@@ -57,11 +56,14 @@ class GlockBot(
       }
     }
 
-  private val senderChatBans = SenderChatBans(SenderChatApi(apiKey), TelegramBanStorage(bot, fromId(storageChannelId)))
+  private val storage = TelegramBanStorage(bot, fromId(storageChannelId))
+  private val senderChatBans = SenderChatBans(SenderChatApi(apiKey), storage)
+  private val userRestrictions = userRestrictionsOverride ?: UserRestrictions(UserPermissionsApi(apiKey), storage)
 
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
   fun cleanTempMessages() {
+    userRestrictions.restoreExpired()
     senderChatBans.unbanExpired()
     forEachChat(ChatOps::cleanTempMessages)
   }
@@ -76,11 +78,11 @@ class GlockBot(
       ChatOps(
         bot,
         fromId(chat.id),
-        restrictions,
         restrictionsDuration,
         healingConstant,
         healingTimeZone,
-        senderChatBans
+        senderChatBans,
+        userRestrictions
       )
     }
   }
