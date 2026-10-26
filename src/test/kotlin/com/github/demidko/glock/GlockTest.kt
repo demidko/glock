@@ -106,7 +106,7 @@ class GlockTest {
     glock.handle(message(4, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted).hasSize(1)
-    assertThat(tg.edits.last().second).isEqualTo("💨 $shield💥🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("$shield💨 💥🔫 $hunterLink")
   }
 
   @Test
@@ -118,7 +118,7 @@ class GlockTest {
     glock.handle(message(3, hunter, "/shoot", replyTo = message(2, admin, "I am armoured")))
 
     assertThat(tg.restricted).isEmpty()
-    assertThat(tg.edits.single().second).isEqualTo("💨 $shield💥🔫 $hunterLink")
+    assertThat(tg.edits.single().second).isEqualTo("$shield💨 💥🔫 $hunterLink")
   }
 
   @Test

@@ -216,8 +216,8 @@ class Glock(
 
   /**
    * `@victim 🤐5m+5m 💥🔫 @hunter`: what was left plus what this hit added, minutes only, pellets merged by victim.
-   * Armour faces the gun and takes the explosion; to its left is where the bullet went: `@bystander 🤐5m @admin🛡️💥🔫 @hunter`,
-   * `💨 @admin🛡️💥🔫 @hunter` for a miss, and `@admin🛡️💥🔫 @hunter 🤐5m` when it came back into the hunter.
+   * Armour faces the gun and takes the explosion: `@bystander 🤐5m @admin🛡️💥🔫 @hunter` when the bullet flew on,
+   * `@admin🛡️💥🔫 @hunter 🤐5m` when it came back into the hunter, `@admin🛡️💨 💥🔫 @hunter` when it puffed away.
    */
   private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, missed: Boolean, weapon: String): String {
     val merged = LinkedHashMap<Long, Hit>()
@@ -228,8 +228,8 @@ class Glock(
     val own = self == null && (merged.isNotEmpty() && merged.keys.all { it == hunter.senderId } || armour.any { it.senderId == hunter.senderId })
     val grip = (if (own) "" else " ${mention(hunter)}") + (self?.let { " 🤐${time(it)}" } ?: "")
     if (armour.isEmpty()) return "$victims 💥$weapon$grip"
-    val flight = listOfNotNull(victims.takeIf(String::isNotEmpty), "💨".takeIf { missed }).joinToString(" ")
-    return "${if (flight.isEmpty()) "" else "$flight "}$shields💥$weapon$grip"
+    val struck = if (missed) "$shields💨 💥$weapon" else "$shields💥$weapon"
+    return "${if (victims.isEmpty()) "" else "$victims "}$struck$grip"
   }
 
   private fun time(hit: Hit) = if (hit.prior >= 60) "${minutes(hit.prior)}+${minutes(hit.added)}" else minutes(hit.added)
