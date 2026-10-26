@@ -22,12 +22,16 @@ bots, anonymous administrators and basic service messages do not consume it.
 
 Shots restrict only sending messages, media, polls, stickers and link previews. Reactions, member tag editing,
 invitations, pins, chat information and topic permissions retain their existing values. Tags themselves are never
-changed. Glock extends its own active mutes; it skips members already restricted by another administrator or by an
-older version without a saved record. The configured duration must be between 60 seconds and 366 days. Very slow
+changed. Glock extends its own active mutes without re-reading the member, so a moderator change made during such a mute
+is overwritten by the next hit; group default permissions are cached for five minutes. A member whom Telegram
+reports as restricted without a Glock record, such as after a lift that left an exception entry or a moderator
+restriction, is shot anyway, and the new mute stacks on the existing deadline. Only administrators and absent
+members cannot be shot. The configured duration must be between 60 seconds and 366 days. Very slow
 storage operations can cause a shot to be skipped rather than accidentally creating a permanent restriction.
 
 With the healing code, `/heal` removes **any** individual restriction, including moderator restrictions and old
-Glock mutes. Members then inherit the group's current default permissions. The bot confirms healing only after
+Glock mutes. Members then inherit the group's current default permissions: the lift sends exactly those, because
+granting every permission would leave the member as a "restricted" exception entry. The bot confirms healing only after
 Telegram confirms success, without waiting for journal uploads. The healing code uses the command's send time,
 so waiting in a busy chat queue does not invalidate it. Automatic cleanup is conservative: it only releases a still-matching Glock restriction,
 so it does not intentionally overwrite a later moderator change. Telegram offers no atomic conditional update;
@@ -41,14 +45,18 @@ per storage channel. When upgrading from the old storage library, stop the old p
 the new version: its shutdown hook can otherwise publish an outdated index.
 
 Both channel-ban deadlines and user restriction snapshots share a CBOR index in that channel. Each save uploads a
-snapshot and publishes the index before returning, including before a user restriction is applied. Failed or
-ambiguous requests retain enough information for reconciliation after a restart. Unreadable storage stops a write
+snapshot and publishes the index before returning. Shots never wait for that: a user restriction is recorded in
+memory and applied at once, and a maintenance loop publishes the journal about once a second, one upload for every
+shot made in the meantime. Channel bans are still published before Telegram receives them, because the API has no
+timed ban to fall back on. Failed or ambiguous requests retain enough information for reconciliation after a restart. Unreadable storage stops a write
 instead of silently creating an empty registry. The existing `telegram-storage:2025.03.20` index and channel-ban
 snapshots remain readable; the old library is no longer required, and saves no longer depend on graceful shutdown.
-Confirmed healing and other post-request bookkeeping update memory immediately; maintenance batches their journal
-updates. Network uploads do not hold the shared in-memory registry lock. If the process stops before that deferred
-write, user records are reconciled against Telegram after restart; channel deadlines are retried, because the API
-does not expose an equivalent channel restriction state.
+Healing and other bookkeeping update memory immediately as well. Network uploads do not hold the shared in-memory
+registry lock, and a confirmed publication keeps the index in memory, so the channel is re-read only after a failed
+or ambiguous upload. If the process stops before a deferred write, user records are reconciled against Telegram after
+restart; a mute whose record was never published keeps Telegram's own deadline, and Glock does not extend it until it
+expires, although `/heal` still releases it. Channel deadlines are retried, because the API does not expose an
+equivalent channel restriction state.
 
 Telegram expires ordinary user mutes even when the bot is offline. Channel senders have no timed ban in the Bot API,
 so Glock removes their saved bans when they expire, or after restarting if the deadline passed while offline.

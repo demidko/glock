@@ -22,6 +22,8 @@ interface BanStorage {
 class TelegramBanStorage(private val bot: Bot, private val channel: ChatId) :
   BanStorage, UserRestrictionStorage, Closeable {
   private val limiter = RateLimiter.create(1.0)
+  // The index after the last confirmed publication; null when the channel must be re-read.
+  private var publishedIndex: Map<String, String>? = null
 
   @Synchronized
   override fun load(): Map<String, Long> {
@@ -69,10 +71,13 @@ class TelegramBanStorage(private val bot: Bot, private val channel: ChatId) :
   }
 
   private fun publish(key: String, bytes: ByteArray) {
-    // Re-read after a failed/ambiguous publication so another registry's updates are never lost.
-    val index = readIndex()
+    // One instance writes the channel, so the index is re-read only after a failed or ambiguous
+    // publication, when another registry's updates could otherwise be lost.
+    val index = publishedIndex ?: readIndex()
+    publishedIndex = null
     val valueFileId = upload(bytes)
-    val indexFileId = upload(Cbor.encodeToByteArray(index + (key to valueFileId)))
+    val updated = index + (key to valueFileId)
+    val indexFileId = upload(Cbor.encodeToByteArray(updated))
     limiter.acquire()
     val (response, exception) = bot.setChatDescription(channel, indexFileId)
     if (exception != null) throw IOException("Failed to publish restriction storage index", exception)
@@ -80,6 +85,7 @@ class TelegramBanStorage(private val bot: Bot, private val channel: ChatId) :
     check(response?.isSuccessful == true && body?.ok == true && body.result == true) {
       "Telegram did not confirm publication of restriction storage index"
     }
+    publishedIndex = updated
   }
 
   private fun upload(bytes: ByteArray): String {

@@ -45,7 +45,7 @@ class UserRestrictionsTest {
       onRestrict()
       val permissions = arg<MemberPermissions>(2)
       if (result == Success(true) || applyDespiteError) {
-        current = if (permissions == MemberPermissions()) original.copy(tag = current.tag)
+        current = if (arg<Long>(3) == 0L) original.copy(tag = current.tag)
         else UserMemberState("restricted", true, permissions, arg(3), current.tag)
       }
       result
@@ -55,10 +55,12 @@ class UserRestrictionsTest {
   @Test
   fun `shot preserves tag reactions and every non-message permission`() {
     val restrictions = restrictions()
-    onRestrict = { assertThat(storage.saved[key]?.originalState).isEqualTo(original) }
+    onRestrict = { assertThat(restrictions.remainingSeconds(chatId, userId)).isEqualTo(300) }
 
     assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
 
+    assertThat(storage.writes).isEqualTo(0)
+    restrictions.restoreExpired()
     val saved = storage.saved.getValue(key)
     assertThat(saved.originalPermissions).isEqualTo(defaults)
     assertThat(saved.appliedPermissions).isEqualTo(defaults.copy(
@@ -99,13 +101,13 @@ class UserRestrictionsTest {
 
   @Test
   fun `restart restores ownership and heal inherits current group defaults`() {
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
     defaults = defaults.copy(canInviteUsers = true, canSendPolls = false)
 
     val restarted = restrictions()
     assertThat(restarted.heal(chatId, userId)).isTrue()
 
-    verify(exactly = 1) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 1) { api.restrict(chatId, userId, defaults, 0) }
     assertThat(current.status).isEqualTo("member")
     assertThat(current.tag).isEqualTo("Guide")
     restarted.restoreExpired()
@@ -113,16 +115,29 @@ class UserRestrictionsTest {
   }
 
   @Test
-  fun `existing timed or permanent restrictions are not adopted by a shot`() {
+  fun `restrictions without a Glock record are overridden and stack on their deadline`() {
     val restrictions = restrictions()
-    for (deadline in listOf(0L, 2_000L)) {
-      current = UserMemberState("restricted", true, defaults.copy(canSendPolls = false), deadline)
+    current = UserMemberState("restricted", true, defaults.copy(canSendPolls = false), 0)
 
-      assertThat(restrictions.mute(chatId, userId, 300)).isFalse()
-    }
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
+    assertThat(current.untilDate).isEqualTo(1_300)
 
-    assertThat(storage.saved).isEmpty()
-    verify(exactly = 0) { api.restrict(any(), any(), any(), any()) }
+    restrictions.heal(chatId, userId)
+    current = UserMemberState("restricted", true, defaults.copy(canSendPolls = false), 2_000)
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
+    assertThat(current.untilDate).isEqualTo(2_300)
+    assertThat(restrictions.remainingSeconds(chatId, userId)).isEqualTo(1_300)
+  }
+
+  @Test
+  fun `healing sends the group defaults so the member is not left as an exception`() {
+    val restrictions = restrictions()
+    restrictions.mute(chatId, userId, 300)
+
+    assertThat(restrictions.heal(chatId, userId)).isTrue()
+
+    verify(exactly = 1) { api.restrict(chatId, userId, defaults, 0) }
+    verify(exactly = 0) { api.restrict(chatId, userId, MemberPermissions(), any()) }
   }
 
   @Test
@@ -135,7 +150,7 @@ class UserRestrictionsTest {
       assertThat(current.status).isEqualTo("member")
     }
 
-    verify(exactly = 2) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 2) { api.restrict(chatId, userId, defaults, 0) }
     verify(exactly = 0) { api.getMember(any(), any()) }
   }
 
@@ -160,7 +175,7 @@ class UserRestrictionsTest {
 
     assertThat(current.untilDate).isEqualTo(9_000)
     assertThat(storage.saved).isEmpty()
-    verify(exactly = 0) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 0) { api.restrict(chatId, userId, defaults, 0) }
   }
 
   @Test
@@ -177,17 +192,48 @@ class UserRestrictionsTest {
   }
 
   @Test
-  fun `changed moderator permissions are left intact by another shot`() {
+  fun `an active Glock mute is extended without re-reading the member`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
     current = current.copy(permissions = current.permissions!!.copy(canReactToMessages = false))
+    now = 1_100
 
-    assertThat(restrictions.mute(chatId, userId, 300)).isFalse()
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
 
-    assertThat(current.permissions?.canReactToMessages).isFalse()
-    restrictions.restoreExpired()
-    assertThat(storage.saved).isEmpty()
-    verify(exactly = 1) { api.restrict(any(), any(), any(), any()) }
+    assertThat(current.untilDate).isEqualTo(1_600)
+    verify(exactly = 1) { api.getMember(chatId, userId) }
+    verify(exactly = 2) { api.restrict(any(), any(), any(), any()) }
+  }
+
+  @Test
+  fun `an expired record is re-read and a changed restriction is overridden`() {
+    val restrictions = restrictions()
+    restrictions.mute(chatId, userId, 300)
+    current = current.copy(permissions = current.permissions!!.copy(canReactToMessages = false))
+    now = 1_300
+
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
+
+    assertThat(current.untilDate).isEqualTo(1_600)
+    verify(exactly = 2) { api.getMember(chatId, userId) }
+    verify(exactly = 2) { api.restrict(any(), any(), any(), any()) }
+  }
+
+  @Test
+  fun `chat permissions are read once per chat until the cache expires`() {
+    val restrictions = restrictions()
+    for (other in listOf(userId + 1, userId + 2)) {
+      every { api.getMember(chatId, other) } returns Success(original)
+      every { api.restrict(chatId, other, any(), any()) } returns Success(true)
+    }
+    restrictions.mute(chatId, userId, 300)
+    restrictions.mute(chatId, userId + 1, 300)
+    verify(exactly = 1) { api.getPermissions(chatId) }
+
+    now = 1_301
+    restrictions.mute(chatId, userId + 2, 300)
+
+    verify(exactly = 2) { api.getPermissions(chatId) }
   }
 
   @Test
@@ -203,19 +249,19 @@ class UserRestrictionsTest {
 
   @Test
   fun `expired Telegram restriction is reconciled without a redundant write`() {
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
     now = 1_300
     current = original
 
     restrictions().restoreExpired()
 
     assertThat(storage.saved).isEmpty()
-    verify(exactly = 0) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 0) { api.restrict(chatId, userId, defaults, 0) }
   }
 
   @Test
   fun `expiry retries an unchanged restriction when Telegram still reports it`() {
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
     now = 1_300
     result = HttpError(503, "Unavailable")
 
@@ -225,13 +271,14 @@ class UserRestrictionsTest {
     restrictions().restoreExpired()
 
     assertThat(storage.saved).isEmpty()
-    verify(exactly = 2) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 2) { api.restrict(chatId, userId, defaults, 0) }
   }
 
   @Test
   fun `failed heal returns false and keeps ownership for retry`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
+    restrictions.restoreExpired()
     result = HttpError(400, "Missing permission")
 
     assertThat(restrictions.heal(chatId, userId)).isFalse()
@@ -248,26 +295,52 @@ class UserRestrictionsTest {
   }
 
   @Test
-  fun `failed write-ahead persistence prevents muting`() {
+  fun `a shot never waits for the journal and storage failures do not block it`() {
+    val restrictions = restrictions()
     storage.failWrites = true
 
-    assertThat(restrictions().mute(chatId, userId, 300)).isFalse()
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
 
-    verify(exactly = 0) { api.restrict(any(), any(), any(), any()) }
+    assertThat(current.untilDate).isEqualTo(1_300)
+    assertThat(storage.writes).isEqualTo(0)
+    restrictions.restoreExpired()
+    assertThat(storage.saved).isEmpty()
+    storage.failWrites = false
+    restrictions.restoreExpired()
+    assertThat(storage.saved.getValue(key).untilDate).isEqualTo(1_300)
+    verify(exactly = 1) { api.restrict(any(), any(), any(), any()) }
   }
 
   @Test
-  fun `ambiguous journal publication is repaired without muting the user`() {
+  fun `one journal upload publishes every shot of a volley`() {
     val restrictions = restrictions()
+    val otherUserId = userId + 1
+    every { api.getMember(chatId, otherUserId) } returns Success(original)
+    every { api.restrict(chatId, otherUserId, any(), any()) } returns Success(true)
+
+    assertThat(restrictions.mute(chatId, userId, 300)).isTrue()
+    assertThat(restrictions.mute(chatId, otherUserId, 300)).isTrue()
+    restrictions.restoreExpired()
+
+    assertThat(storage.writes).isEqualTo(1)
+    assertThat(storage.saved.keys).containsExactly(key, "$chatId:$otherUserId")
+    restrictions.restoreExpired()
+    assertThat(storage.writes).isEqualTo(1)
+  }
+
+  @Test
+  fun `ambiguous journal publication is republished by the next cleanup`() {
+    val restrictions = restrictions()
+    restrictions.mute(chatId, userId, 300)
     storage.failAfterWrite = true
 
-    assertThat(restrictions.mute(chatId, userId, 300)).isFalse()
+    restrictions.restoreExpired()
+
     assertThat(storage.saved).containsKey(key)
     storage.failAfterWrite = false
     restrictions.restoreExpired()
-
-    assertThat(storage.saved).isEmpty()
-    verify(exactly = 0) { api.restrict(any(), any(), any(), any()) }
+    assertThat(storage.writes).isEqualTo(2)
+    assertThat(storage.saved).containsKey(key)
   }
 
   @Test
@@ -285,13 +358,15 @@ class UserRestrictionsTest {
   fun `rejected extension keeps the original deadline even if saving rollback fails`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
+    restrictions.restoreExpired()
     result = HttpError(400, "Missing permission")
     onRestrict = { storage.failWrites = true }
 
     assertThat(restrictions.mute(chatId, userId, 300)).isFalse()
     assertThat(restrictions.remainingSeconds(chatId, userId)).isEqualTo(300)
     restrictions.restoreExpired()
-    assertThat(storage.saved.getValue(key).previousUntilDate).isEqualTo(1_300)
+    assertThat(storage.saved.getValue(key).untilDate).isEqualTo(1_300)
+    assertThat(storage.saved.getValue(key).previousUntilDate).isNull()
     storage.failWrites = false
     onRestrict = {}
     result = Success(true)
@@ -303,7 +378,7 @@ class UserRestrictionsTest {
     result = Unknown(IOException("Timed out"))
     applyDespiteError = true
 
-    assertThat(restrictions().mute(chatId, userId, 300)).isFalse()
+    assertThat(shootAndPublish()).isFalse()
     result = Success(true)
     val restarted = restrictions()
     assertThat(restarted.heal(chatId, userId)).isTrue()
@@ -313,11 +388,11 @@ class UserRestrictionsTest {
 
   @Test
   fun `HTTP request timeout retains both possible extension deadlines`() {
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
     result = HttpError(408, "Request timeout")
     applyDespiteError = true
 
-    assertThat(restrictions().mute(chatId, userId, 300)).isFalse()
+    assertThat(shootAndPublish()).isFalse()
 
     assertThat(storage.saved.getValue(key).untilDate).isEqualTo(1_600)
     assertThat(storage.saved.getValue(key).previousUntilDate).isEqualTo(1_300)
@@ -331,11 +406,11 @@ class UserRestrictionsTest {
       storage.saved = emptyMap()
       current = original
       result = Success(true)
-      restrictions().mute(chatId, userId, 300)
+      shootAndPublish()
       result = Unknown(IOException("Timed out"))
       applyDespiteError = applied
 
-      assertThat(restrictions().mute(chatId, userId, 300)).isFalse()
+      assertThat(shootAndPublish()).isFalse()
       assertThat(storage.saved.getValue(key).previousUntilDate).isEqualTo(1_300)
       result = Success(true)
       applyDespiteError = false
@@ -362,6 +437,7 @@ class UserRestrictionsTest {
   fun `successful heal never attempts synchronous journal persistence`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
+    restrictions.restoreExpired()
     val writesBeforeHeal = storage.writes
     storage.onSave = { error("Healing must not publish a journal snapshot") }
 
@@ -376,6 +452,7 @@ class UserRestrictionsTest {
   fun `restart before deferred heal persistence reconciles the already healed user`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
+    restrictions.restoreExpired()
     restrictions.heal(chatId, userId)
     assertThat(storage.saved).containsKey(key)
     now = 1_300
@@ -383,11 +460,11 @@ class UserRestrictionsTest {
     restrictions().restoreExpired()
 
     assertThat(storage.saved).isEmpty()
-    verify(exactly = 1) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 1) { api.restrict(chatId, userId, defaults, 0) }
   }
 
   @Test
-  fun `blocked unrelated snapshot cannot block healing or resurrect its record`() {
+  fun `a blocked journal upload cannot block healing or shooting or resurrect a healed record`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
     val otherUserId = userId + 1
@@ -400,16 +477,18 @@ class UserRestrictionsTest {
       check(releaseSave.await(5, SECONDS))
     }
 
-    newFixedThreadPool(2).use { executor ->
-      val shot = executor.submit(Callable { restrictions.mute(chatId, otherUserId, 300) })
+    newFixedThreadPool(3).use { executor ->
+      val upload = executor.submit(Callable { restrictions.restoreExpired() })
       try {
         assertThat(saving.await(5, SECONDS)).isTrue()
         val heal = executor.submit(Callable { restrictions.heal(chatId, userId) })
+        val shot = executor.submit(Callable { restrictions.mute(chatId, otherUserId, 300) })
         assertThat(heal.get(1, SECONDS)).isTrue()
+        assertThat(shot.get(1, SECONDS)).isTrue()
       } finally {
         releaseSave.countDown()
       }
-      assertThat(shot.get(5, SECONDS)).isTrue()
+      upload.get(5, SECONDS)
     }
 
     assertThat(restrictions.remainingSeconds(chatId, userId)).isEqualTo(0)
@@ -424,6 +503,7 @@ class UserRestrictionsTest {
   fun `failed cleanup persistence is retried without repeating a successful heal`() {
     val restrictions = restrictions()
     restrictions.mute(chatId, userId, 300)
+    restrictions.restoreExpired()
     storage.failWrites = true
     restrictions.heal(chatId, userId)
     restrictions.restoreExpired()
@@ -433,7 +513,7 @@ class UserRestrictionsTest {
     restrictions.restoreExpired()
 
     assertThat(storage.saved).isEmpty()
-    verify(exactly = 1) { api.restrict(chatId, userId, MemberPermissions(), 0) }
+    verify(exactly = 1) { api.restrict(chatId, userId, defaults, 0) }
   }
 
   @Test
@@ -449,36 +529,31 @@ class UserRestrictionsTest {
   }
 
   @Test
-  fun `one-minute mute stays finite with no or ten seconds of persistence latency`() {
+  fun `slow member lookup moves the deadline instead of shortening the mute`() {
     for (delay in listOf(0L, 10L)) {
       now = 1_000
       current = original
-      storage.saved = emptyMap()
-      storage.onSave = { now += delay }
+      every { api.getMember(chatId, userId) } answers {
+        now += delay
+        Success(current)
+      }
 
       assertThat(restrictions().mute(chatId, userId, 60)).isTrue()
 
-      assertThat(current.untilDate).isEqualTo(1_060)
+      assertThat(current.untilDate).isEqualTo(1_060 + delay)
       assertThat(current.untilDate - now).isAtLeast(45)
     }
   }
 
   @Test
-  fun `sixteen seconds of persistence latency leaves too little transit margin`() {
-    storage.onSave = { now += 16 }
+  fun `a clock jump before the request cannot create an indefinite mute`() {
+    val restrictions = restrictions()
+    every { clock.instant() } answers { ofEpochSecond(now).also { now += 300 } }
 
-    assertThat(restrictions().mute(chatId, userId, 60)).isFalse()
-
-    verify(exactly = 0) { api.restrict(any(), any(), any(), any()) }
-  }
-
-  @Test
-  fun `persistence taking the entire duration cannot create an indefinite mute`() {
-    storage.onSave = { now += 300 }
-
-    assertThat(restrictions().mute(chatId, userId, 300)).isFalse()
+    assertThat(restrictions.mute(chatId, userId, 300)).isFalse()
 
     verify(exactly = 0) { api.restrict(any(), any(), any(), any()) }
+    assertThat(restrictions.remainingSeconds(chatId, userId)).isEqualTo(0)
   }
 
   @Test
@@ -501,9 +576,9 @@ class UserRestrictionsTest {
 
   @Test
   fun `snapshot serialization preserves both possible deadlines and new permission fields`() {
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
     result = Unknown(IOException("Timed out"))
-    restrictions().mute(chatId, userId, 300)
+    shootAndPublish()
 
     val restored = Cbor.decodeFromByteArray<Map<String, UserRestrictionRecord>>(Cbor.encodeToByteArray(storage.saved))
 
@@ -511,6 +586,9 @@ class UserRestrictionsTest {
   }
 
   private fun restrictions() = UserRestrictions(api, storage, clock)
+
+  /** A shot followed by the maintenance cycle that publishes its journal. */
+  private fun shootAndPublish(): Boolean = restrictions().run { mute(chatId, userId, 300).also { restoreExpired() } }
 
   private class MemoryStorage : UserRestrictionStorage {
     var saved: Map<String, UserRestrictionRecord> = emptyMap()

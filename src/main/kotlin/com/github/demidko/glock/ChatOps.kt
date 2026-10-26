@@ -159,7 +159,8 @@ class ChatOps(
 
   fun buckshot(gunfighterMessage: Message) {
     val gunfighterId = senderId(gunfighterMessage) ?: return
-    val targetMessages = recentMessages.filter { senderId(it) != gunfighterId }
+    // The synchronized queue guards single operations only; iterate over a copy taken under its lock.
+    val targetMessages = synchronized(recentMessages) { recentMessages.toList() }.filter { senderId(it) != gunfighterId }
     if (targetMessages.isEmpty()) {
       markAsTemp(gunfighterMessage)
       return

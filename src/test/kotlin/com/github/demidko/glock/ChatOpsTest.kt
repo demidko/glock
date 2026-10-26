@@ -510,66 +510,6 @@ class ChatOpsTest {
     }
   }
 
-  @Test
-  fun `queued shots preserve both additions to an ordinary user's restriction`() {
-    val initialRemaining = 300L
-    val remaining = AtomicLong(initialRemaining)
-    val firstRead = CountDownLatch(1)
-    val releaseFirstRead = CountDownLatch(1)
-    val completed = CountDownLatch(2)
-    every { userRestrictions.mute(chat.id, user.id, duration.seconds) } answers {
-      val previous = remaining.get()
-      firstRead.countDown()
-      check(releaseFirstRead.await(5, SECONDS))
-      remaining.set(previous + arg<Long>(2))
-      true
-    }
-    every { userRestrictions.remainingSeconds(chat.id, user.id) } answers { remaining.get() }
-
-    ChatTaskDispatcher().use { dispatcher ->
-      try {
-        dispatcher.execute(chat.id) {
-          try { chatOps.shoot(replyingTo(message(1, from = user))) }
-          finally { completed.countDown() }
-        }
-        assertThat(firstRead.await(5, SECONDS)).isTrue()
-        dispatcher.execute(chat.id) {
-          try { chatOps.shoot(replyingTo(message(2, from = user))) }
-          finally { completed.countDown() }
-        }
-      } finally {
-        releaseFirstRead.countDown()
-      }
-      assertThat(completed.await(5, SECONDS)).isTrue()
-    }
-
-    assertThat(remaining.get()).isEqualTo(initialRemaining + 2 * duration.seconds)
-    verify(exactly = 2) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
-  }
-
-  @Test
-  fun `queued statuette command hits the next message rather than its placement message`() {
-    val placement = message(1, from = gunfighter)
-    val target = message(2, from = user)
-    allowUserRestriction()
-    every { bot.deleteMessage(chatId, 999) } returns Success(true)
-    val completed = CountDownLatch(1)
-
-    ChatTaskDispatcher().use { dispatcher ->
-      // The generic message handler is registered before command handlers in GlockBot.
-      dispatcher.execute(chat.id) { chatOps.tryProcessStatuette(placement) }
-      dispatcher.execute(chat.id) { chatOps.statuette(placement) }
-      dispatcher.execute(chat.id) {
-        try { chatOps.tryProcessStatuette(target) }
-        finally { completed.countDown() }
-      }
-      assertThat(completed.await(5, SECONDS)).isTrue()
-    }
-
-    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
-    verify(exactly = 0) { userRestrictions.mute(chat.id, gunfighter.id, any()) }
-    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
-  }
 
   private fun allowUserRestriction(victim: User = user) {
     every { userRestrictions.mute(chat.id, victim.id, duration.seconds) } returns true

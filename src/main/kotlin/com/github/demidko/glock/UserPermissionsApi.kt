@@ -54,7 +54,6 @@ data class UserMemberState(
 /** The pinned Telegram client omits newer permissions, so use the complete Bot API schema here. */
 class UserPermissionsApi(apiKey: String, apiUrl: String = "https://api.telegram.org/") {
   private val gson = Gson()
-  private val permissionNames = gson.toJsonTree(MemberPermissions()).asJsonObject.keySet().toSet()
   private val service = Retrofit.Builder()
     .baseUrl("${apiUrl}bot$apiKey/")
     .client(
@@ -151,9 +150,7 @@ class UserPermissionsApi(apiKey: String, apiUrl: String = "https://api.telegram.
 
   private fun JsonObject.permissions(): MemberPermissions {
     // Missing fields must not be read as false and silently overwrite the user's existing rights.
-    if (keySet().any { it.startsWith("can_") && it !in permissionNames && it != "can_send_media_messages" }) {
-      throw JsonParseException("Unsupported chat permission")
-    }
+    // Fields this schema does not know are ignored: failing the lookup would make every restricted member unshootable.
     return MemberPermissions(
       canSendMessages = requiredBoolean("can_send_messages"),
       canSendAudios = requiredBoolean("can_send_audios"),

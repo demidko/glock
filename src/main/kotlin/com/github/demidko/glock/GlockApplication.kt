@@ -7,6 +7,7 @@ import java.time.Duration.ofSeconds
 fun main(args: Array<String>) {
   val glockBot = ApplicationFactory().glockBot
   startLoopWithFixedRate(ofSeconds(2), glockBot::cleanTempMessages)
+  startLoopWithFixedRate(ofSeconds(1), glockBot::reconcileRestrictions)
   glockBot.startPolling()
 }
 

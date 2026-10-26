@@ -190,11 +190,11 @@ class UserPermissionsApiTest {
   }
 
   @Test
-  fun `future permissions require an explicit schema update instead of being discarded`() {
+  fun `future permissions are ignored instead of failing the lookup`() {
     val permissions = permissionJson().apply { addProperty("can_send_future_content", true) }
     response = """{"ok":true,"result":{"permissions":$permissions}}"""
 
-    assertThat(api.getPermissions(-1)).isInstanceOf(InvalidResponse::class.java)
+    assertThat(api.getPermissions(-1).getOrNull()).isNotNull()
   }
 
   @Test

@@ -18,6 +18,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import io.mockk.verify
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.decodeFromByteArray
@@ -153,7 +154,19 @@ class TelegramBanStorageTest {
     telegram.corruptIndex()
 
     assertThrows<IllegalStateException> { storage.load() }
-    assertThrows<IllegalStateException> { storage.saveUsers(emptyMap()) }
+    assertThrows<IllegalStateException> { openStorage().saveUsers(emptyMap()) }
+  }
+
+  @Test
+  fun `confirmed publication keeps the index in memory for the next save`() {
+    val storage = openStorage()
+    storage.save(mapOf("-10:-20" to 1000L))
+    storage.saveUsers(mapOf("-10:11" to userRecord()))
+    storage.save(mapOf("-10:-20" to 1300L))
+
+    verify(exactly = 1) { telegram.bot.getChat(channelId) }
+    assertThat(openStorage().loadUsers()).containsKey("-10:11")
+    assertThat(openStorage().load()).containsEntry("-10:-20", 1300L)
   }
 
   @Test

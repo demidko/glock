@@ -11,6 +11,7 @@ import com.github.kotlintelegrambot.entities.Chat
 import com.github.kotlintelegrambot.entities.ChatId.Companion.fromId
 import com.github.kotlintelegrambot.entities.Message
 import com.github.kotlintelegrambot.entities.User
+import java.lang.Thread.startVirtualThread
 import java.time.Duration
 import java.time.Duration.ofDays
 import java.time.Duration.ofSeconds
@@ -34,13 +35,10 @@ class GlockBot(
     }
   }
 
-  private val chatTasks = ChatTaskDispatcher()
-
   private val bot =
     bot {
       token = apiKey
       dispatch {
-        // Existing statuettes see this message before a command can place a new one.
         message(handleMessage(ChatOps::tryProcessStatuette))
         command("shoot", handleCommand(ChatOps::shoot))
         command("buckshot", handleCommand(ChatOps::buckshot))
@@ -62,12 +60,17 @@ class GlockBot(
 
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
+  /** Deletes expired temporary messages; separate from [reconcileRestrictions] so journal uploads never delay it. */
   fun cleanTempMessages() {
-    cleanSafely("userRestrictions") { userRestrictions.restoreExpired() }
-    cleanSafely("senderChatBans") { senderChatBans.unbanExpired() }
     forEachChat { operations ->
       cleanSafely("temporaryMessages") { operations.cleanTempMessages() }
     }
+  }
+
+  /** Releases expired restrictions and publishes the deferred journal. */
+  fun reconcileRestrictions() {
+    cleanSafely("userRestrictions") { userRestrictions.restoreExpired() }
+    cleanSafely("senderChatBans") { senderChatBans.unbanExpired() }
   }
 
   private fun cleanSafely(operation: String, action: () -> Unit) {
@@ -107,35 +110,30 @@ class GlockBot(
 
   private fun handleMessage(method: ChatOps.(Message) -> Unit): HandleMessage {
     return {
-      dispatch(method, message)
+      dispatch(message) { method(message) }
     }
   }
 
   private fun handleCommand(method: ChatOps.(Message, List<String>) -> Unit): HandleCommand {
     return {
-      dispatch(method, message, args)
+      dispatch(message) { method(message, args) }
     }
   }
 
   private fun handleCommand(method: ChatOps.(Message) -> Unit): HandleCommand {
     return {
-      dispatch(method, message)
+      dispatch(message) { method(message) }
     }
   }
 
-  private fun dispatch(method: ChatOps.(Message) -> Unit, message: Message) {
-    chatTasks.execute(message.chat.id) {
-      getChatOps(message.chat).method(message)
-    }
-  }
-
-  private fun dispatch(
-    method: ChatOps.(Message, List<String>) -> Unit,
-    message: Message,
-    args: List<String>
-  ) {
-    chatTasks.execute(message.chat.id) {
-      getChatOps(message.chat).method(message, args)
+  /** Every update runs on its own thread at once; the registries serialize per target themselves. */
+  private fun dispatch(message: Message, action: ChatOps.() -> Unit) {
+    startVirtualThread {
+      try {
+        getChatOps(message.chat).action()
+      } catch (failure: Throwable) {
+        ActionDiagnostics.error("dispatch", "chat_id=${message.chat.id} update failed", failure)
+      }
     }
   }
 

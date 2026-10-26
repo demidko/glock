@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.time.Clock
 import java.time.Clock.systemUTC
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 
 interface UserRestrictionStorage {
@@ -35,37 +36,46 @@ class UserRestrictions(
   private val targetLocks = Array(64) { Any() }
   private var records = storage.loadUsers()
   private var needsSave = false
+  private val chatPermissions = ConcurrentHashMap<Long, Pair<Long, MemberPermissions>>()
 
   fun mute(chatId: Long, userId: Long, durationSeconds: Long): Boolean = withTarget(chatId, userId) { target ->
     if (durationSeconds !in MIN_MUTE_SECONDS..MAX_MUTE_SECONDS) return@withTarget false
-    val current = api.getMember(chatId, userId).getOrNull() ?: return@withTarget false
     var previous = record(target)
-    if (previous != null) {
-      if (owns(previous, current)) {
-        // Resolve an uncertain request from the server before adding more time.
-        previous = previous.copy(untilDate = current.untilDate, previousUntilDate = null)
-      } else {
-        forget(target)
-        if (current.status != "member" || !current.isMember) return@withTarget false
-        previous = null
+    var current: UserMemberState? = null
+    val active = previous != null && previous.previousUntilDate == null &&
+      previous.untilDate > clock.instant().epochSecond
+    if (!active) {
+      // A fresh target or an uncertain deadline is read from Telegram. An active Glock mute is extended
+      // without that round trip, so a moderator change made meanwhile is overwritten by the next hit.
+      current = api.getMember(chatId, userId).getOrNull() ?: return@withTarget false
+      if (previous != null) {
+        if (owns(previous, current)) {
+          // Resolve an uncertain request from the server before adding more time.
+          previous = previous.copy(untilDate = current.untilDate, previousUntilDate = null)
+        } else {
+          forget(target)
+          previous = null
+        }
       }
+      // Administrators and absent members cannot be restricted. A restriction without a Glock record is
+      // overridden, stacking on its deadline: a lifted restriction can leave a member in "restricted" status.
+      if (!current.isMember || current.status != "member" && current.status != "restricted") return@withTarget false
     }
-    if (previous == null && (current.status != "member" || !current.isMember)) return@withTarget false
-    val originalPermissions = previous?.originalPermissions
-      ?: api.getPermissions(chatId).getOrNull() ?: return@withTarget false
+    val originalPermissions = previous?.originalPermissions ?: permissions(chatId) ?: return@withTarget false
     val now = clock.instant().epochSecond
-    val remaining = maxOf(0, (previous?.untilDate ?: now) - now)
+    val remaining = maxOf(0, (previous?.untilDate ?: current?.untilDate ?: now) - now)
     if (durationSeconds > MAX_MUTE_SECONDS - remaining) return@withTarget false
     val until = now + remaining + durationSeconds
     val planned = UserRestrictionRecord(
-      originalState = previous?.originalState ?: current,
+      originalState = previous?.originalState ?: current ?: return@withTarget false,
       originalPermissions = originalPermissions,
       appliedPermissions = previous?.appliedPermissions ?: originalPermissions.muted(),
       untilDate = until,
       previousUntilDate = previous?.untilDate
     )
-    // Publish ownership before the mutation: a timeout can hide a successful Telegram request.
-    if (!persistPlan(target, planned)) return@withTarget false
+    // Record ownership before the mutation: a timeout can hide a successful Telegram request.
+    // Maintenance publishes the journal later, so a shot never waits for the storage channel.
+    replace(target, planned)
     // Telegram turns deadlines less than 30 seconds away into permanent restrictions.
     // Leave transit margin beyond the mutation client's bounded 10-second call timeout.
     if (until - clock.instant().epochSecond !in MIN_SAFE_REMAINING_SECONDS..MAX_MUTE_SECONDS) {
@@ -93,6 +103,7 @@ class UserRestrictions(
     return maxOf(0, (record("$chatId:$userId")?.untilDate ?: 0) - clock.instant().epochSecond)
   }
 
+  /** Releases expired Glock restrictions and publishes the journal changes made since the last cycle. */
   fun restoreExpired() {
     val now = clock.instant().epochSecond
     val expired = synchronized(registryLock) {
@@ -115,6 +126,15 @@ class UserRestrictions(
     flush()
   }
 
+  /** Group defaults change rarely; a short cache saves one request on every first hit in a chat. */
+  private fun permissions(chatId: Long): MemberPermissions? {
+    val now = clock.instant().epochSecond
+    chatPermissions[chatId]?.takeIf { it.first > now }?.let { return it.second }
+    val loaded = api.getPermissions(chatId).getOrNull() ?: return null
+    chatPermissions[chatId] = (now + PERMISSIONS_CACHE_SECONDS) to loaded
+    return loaded
+  }
+
   private fun owns(saved: UserRestrictionRecord, current: UserMemberState): Boolean {
     return current.status == "restricted" && current.isMember &&
       current.permissions == saved.appliedPermissions &&
@@ -122,8 +142,10 @@ class UserRestrictions(
   }
 
   private fun release(chatId: Long, userId: Long, target: String): Boolean {
-    // Lift individual restrictions and inherit today's group defaults.
-    if (!succeeded(api.restrict(chatId, userId, MemberPermissions(), 0))) return false
+    // Permissions equal to the group's defaults make the member a regular member again. Granting everything
+    // would leave an exception entry: status "restricted" with more rights than the group allows.
+    val defaults = permissions(chatId) ?: return false
+    if (!succeeded(api.restrict(chatId, userId, defaults, 0))) return false
     if (record(target) != null) forget(target)
     return true
   }
@@ -143,25 +165,10 @@ class UserRestrictions(
 
   private fun record(target: String): UserRestrictionRecord? = synchronized(registryLock) { records[target] }
 
-  private fun persistPlan(target: String, planned: UserRestrictionRecord): Boolean = synchronized(persistenceLock) {
-    val snapshot = synchronized(registryLock) { records + (target to planned) }
-    if (!save(snapshot)) {
-      // A timeout may hide a published plan; maintenance must republish the authoritative state.
-      synchronized(registryLock) { needsSave = true }
-      return@synchronized false
-    }
-    synchronized(registryLock) {
-      // A different target may have been healed while this snapshot was being published.
-      records = records + (target to planned)
-      needsSave = records != snapshot
-    }
-    true
-  }
-
   private fun forget(target: String) = replace(target, null)
 
   private fun replace(target: String, value: UserRestrictionRecord?) = synchronized(registryLock) {
-    // A confirmed Telegram result is visible immediately; maintenance publishes the journal later.
+    // Every change is visible immediately; maintenance publishes the journal later, one upload per cycle.
     records = if (value == null) records - target else records + (target to value)
     needsSave = true
   }
@@ -205,5 +212,6 @@ class UserRestrictions(
     const val MIN_MUTE_SECONDS = 60L
     const val MIN_SAFE_REMAINING_SECONDS = 45L
     const val MAX_MUTE_SECONDS = 366L * 24 * 60 * 60
+    const val PERMISSIONS_CACHE_SECONDS = 300L
   }
 }
