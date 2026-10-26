@@ -26,11 +26,11 @@ then the hunter:
 
 Administrators are armoured: Telegram refuses to restrict them, so the bullet ricochets, with equal chances back
 into the hunter, into a random author of the last twelve messages, or into thin air. The shield faces the gun and
-takes the explosion; to its left is where the bullet went, and a puff at the shield means it went nowhere. Nothing
-ever vanishes silently:
+takes the explosion. Everyone the bullet met stands on the left, separated by dots, each with their state; a puff at
+the shield means the bullet went nowhere. Nothing ever vanishes silently:
 
 ```
-@bystander🤐5m @admin🛡️  💥🔫 @hunter   the bullet flew on into a bystander
+@bystander🤐5m · @admin🛡️  💥🔫 @hunter   the bullet flew on into a bystander
 @admin🛡️  💥🔫 @hunter🤐5m             it came back into the hunter
 @admin🛡️💨  💥🔫 @hunter             it puffed away: a miss, or the bystander was armoured too
 @admin🛡️  💥🔫                         an armoured hunter shooting their own message

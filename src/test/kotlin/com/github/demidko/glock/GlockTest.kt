@@ -100,7 +100,7 @@ class GlockTest {
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted.single().userId).isEqualTo(33)
-    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a>🤐5m $shield  💥🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a>🤐5m · $shield  💥🔫 $hunterLink")
 
     tg.refuse = setOf(44, 33)
     glock.handle(message(4, hunter, "/shoot", replyTo = target))
