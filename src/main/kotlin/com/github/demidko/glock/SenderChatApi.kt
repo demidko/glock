@@ -25,27 +25,47 @@ class SenderChatApi(apiKey: String, apiUrl: String = "https://api.telegram.org/"
     .create(Service::class.java)
 
   fun ban(chatId: Long, senderChatId: Long): TelegramBotResult<Boolean> {
-    return execute(service.ban(chatId, senderChatId))
+    return execute(service.ban(chatId, senderChatId), "banChatSenderChat", chatId, senderChatId)
   }
 
   fun unban(chatId: Long, senderChatId: Long): TelegramBotResult<Boolean> {
-    return execute(service.unban(chatId, senderChatId))
+    return execute(service.unban(chatId, senderChatId), "unbanChatSenderChat", chatId, senderChatId)
   }
 
-  private fun execute(call: Call<Response<Boolean>>): TelegramBotResult<Boolean> {
+  private fun execute(
+    call: Call<Response<Boolean>>, operation: String, chatId: Long, senderChatId: Long
+  ): TelegramBotResult<Boolean> {
+    val request = "chat_id=$chatId sender_chat_id=$senderChatId"
     return try {
       val response = call.execute()
       val body = response.body()
       when {
-        !response.isSuccessful -> HttpError(response.code(), response.errorBody()?.use { it.string() })
-        body == null -> InvalidResponse(response.code(), response.message(), null)
-        !body.ok -> TelegramApi(body.errorCode ?: response.code(), body.errorDescription ?: "Sender chat request failed")
-        body.result != true -> InvalidResponse(response.code(), response.message(), body)
+        !response.isSuccessful -> {
+          val errorBody = response.errorBody()?.use { it.string() }
+          ActionDiagnostics.error(operation, "$request HTTP ${response.code()} response=$errorBody")
+          HttpError(response.code(), errorBody)
+        }
+        body == null -> {
+          ActionDiagnostics.error(operation, "$request HTTP ${response.code()} empty response")
+          InvalidResponse(response.code(), response.message(), null)
+        }
+        !body.ok -> {
+          val code = body.errorCode ?: response.code()
+          val description = body.errorDescription ?: "Sender chat request failed"
+          ActionDiagnostics.error(operation, "$request HTTP ${response.code()} Telegram $code: $description")
+          TelegramApi(code, description)
+        }
+        body.result != true -> {
+          ActionDiagnostics.error(operation, "$request HTTP ${response.code()} missing or false result")
+          InvalidResponse(response.code(), response.message(), body)
+        }
         else -> Success(true)
       }
     } catch (e: IOException) {
+      ActionDiagnostics.error(operation, "$request request outcome unknown", e)
       Unknown(e)
     } catch (e: JsonParseException) {
+      ActionDiagnostics.error(operation, "$request unreadable response; request outcome unknown", e)
       Unknown(e)
     }
   }

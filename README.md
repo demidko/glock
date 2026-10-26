@@ -14,7 +14,8 @@ Successful hits leave a short, silent log in the chat: `💥 @shooter → @targe
 The duration is the total remaining mute time, including earlier hits; seconds are shown when needed (`5m 30s`).
 User labels link to their Telegram IDs; public channel labels link to their usernames.
 Channels without a username are shown by title and ID. Statuette hits name the person who placed the statuette.
-Ban logs remain in the chat history.
+Ban logs remain in the chat history. A statuette remains armed until a restriction succeeds; failed hits,
+bots, anonymous administrators and basic service messages do not consume it.
 
 Shots restrict only sending messages, media, polls, stickers and link previews. Reactions, member tag editing,
 invitations, pins, chat information and topic permissions retain their existing values. Tags themselves are never
@@ -24,7 +25,8 @@ storage operations can cause a shot to be skipped rather than accidentally creat
 
 With the healing code, `/heal` removes **any** individual restriction, including moderator restrictions and old
 Glock mutes. Members then inherit the group's current default permissions. The bot confirms healing only after
-Telegram confirms success. Automatic cleanup is conservative: it only releases a still-matching Glock restriction,
+Telegram confirms success, without waiting for journal uploads. The healing code uses the command's send time,
+so waiting in a busy chat queue does not invalidate it. Automatic cleanup is conservative: it only releases a still-matching Glock restriction,
 so it does not intentionally overwrite a later moderator change. Telegram offers no atomic conditional update;
 a moderator change concurrent with the final request cannot be completely excluded.
 
@@ -40,11 +42,22 @@ snapshot and publishes the index before returning, including before a user restr
 ambiguous requests retain enough information for reconciliation after a restart. Unreadable storage stops a write
 instead of silently creating an empty registry. The existing `telegram-storage:2025.03.20` index and channel-ban
 snapshots remain readable; the old library is no longer required, and saves no longer depend on graceful shutdown.
+Confirmed healing and other post-request bookkeeping update memory immediately; maintenance batches their journal
+updates. Network uploads do not hold the shared in-memory registry lock. If the process stops before that deferred
+write, user records are reconciled against Telegram after restart; channel deadlines are retried, because the API
+does not expose an equivalent channel restriction state.
 
 Telegram expires ordinary user mutes even when the bot is offline. Channel senders have no timed ban in the Bot API,
 so Glock removes their saved bans when they expire, or after restarting if the deadline passed while offline.
 Repeated hits extend the remaining time. Telegram's channel ban prevents the channel owner from writing on behalf
 of any of their channels in that chat. See the [Telegram Bot API](https://core.telegram.org/bots/api#banchatsenderchat).
+
+## Error diagnostics
+
+Failures include the originating command and arguments, actor and target IDs/names/usernames, chat and topic,
+message IDs, Telegram method and requested parameters, HTTP status and server response. Exceptions retain their
+stack and cause; rejected API requests include the local call stack. Healing codes may appear in these logs;
+bot API tokens are redacted. One failed maintenance task does not stop subsequent cleanup cycles.
 
 ## Build
 

@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.lang.Thread.sleep
 import java.time.Duration.ofSeconds
+import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset.UTC
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.SECONDS
@@ -232,6 +234,108 @@ class ChatOpsTest {
         "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m"
     )
     verifyNoUserRestriction()
+  }
+
+  @Test
+  fun `statuette survives a failed user mute and hits the next eligible message`() {
+    every { userRestrictions.mute(chat.id, user.id, duration.seconds) } returns false andThen true
+    every { bot.deleteMessage(chatId, 999) } returns Success(true)
+    chatOps.statuette(message(1, from = gunfighter))
+
+    chatOps.tryProcessStatuette(message(2, from = user))
+
+    verify(exactly = 0) { bot.deleteMessage(chatId, 999) }
+    verifyNoBanLog()
+    chatOps.tryProcessStatuette(message(3, from = user))
+    verify(exactly = 2) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
+  }
+
+  @Test
+  fun `statuette survives a failed channel ban`() {
+    every { senderChatBans.ban(chat.id, channel.id, duration.seconds) } returns false andThen true
+    every { bot.deleteMessage(chatId, 999) } returns Success(true)
+    chatOps.statuette(message(1, from = gunfighter))
+
+    chatOps.tryProcessStatuette(message(2, senderChat = channel))
+
+    verify(exactly = 0) { bot.deleteMessage(chatId, 999) }
+    chatOps.tryProcessStatuette(message(3, senderChat = channel))
+    verify(exactly = 2) { senderChatBans.ban(chat.id, channel.id, duration.seconds) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
+  }
+
+  @Test
+  fun `statuette ignores anonymous administrators and absent senders`() {
+    every { bot.deleteMessage(chatId, 999) } returns Success(true)
+    allowUserRestriction()
+    chatOps.statuette(message(1, from = gunfighter))
+
+    chatOps.tryProcessStatuette(message(2, from = fakeUser, senderChat = chat))
+    chatOps.tryProcessStatuette(message(3))
+
+    verify(exactly = 0) { bot.deleteMessage(chatId, 999) }
+    verify { userRestrictions wasNot Called }
+    chatOps.tryProcessStatuette(message(4, from = user))
+    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
+  }
+
+  @Test
+  fun `successful statuette does not hit twice when its message cannot be deleted`() {
+    every { bot.deleteMessage(chatId, 999) } returns Unknown(IOException("Deletion unavailable"))
+    allowUserRestriction()
+    chatOps.statuette(message(1, from = gunfighter))
+
+    chatOps.tryProcessStatuette(message(2, from = user))
+    chatOps.tryProcessStatuette(message(3, from = user))
+
+    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
+  }
+
+  @Test
+  fun `statuette skips bot and membership service messages`() {
+    every { bot.deleteMessage(chatId, 999) } returns Success(true)
+    allowUserRestriction()
+    chatOps.statuette(message(1, from = gunfighter))
+
+    chatOps.tryProcessStatuette(message(2, from = fakeUser))
+    chatOps.tryProcessStatuette(message(3, from = user).copy(newChatMembers = listOf(user)))
+    chatOps.tryProcessStatuette(message(4, from = user).copy(leftChatMember = user))
+
+    verify { userRestrictions wasNot Called }
+    verify(exactly = 0) { bot.deleteMessage(chatId, 999) }
+    chatOps.tryProcessStatuette(message(5, from = user))
+    verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
+    verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
+  }
+
+  @Test
+  fun `healing validates the sent minute in the configured zone after queue delay`() {
+    val localChatOps = ChatOps(bot, chatId, duration, 7, ZoneId.of("America/New_York"), senderChatBans, userRestrictions)
+    val target = message(1, from = user)
+    every { userRestrictions.heal(chat.id, user.id) } returns true
+    val sentCommands = listOf(
+      Instant.parse("2020-01-02T15:04:00Z").epochSecond to 728L,
+      Instant.parse("2020-01-02T17:06:00Z").epochSecond to 882L
+    )
+
+    for ((sentAt, code) in sentCommands) {
+      localChatOps.heal(replyingTo(target).copy(date = sentAt), listOf(code.toString()))
+    }
+
+    verify(exactly = 2) { userRestrictions.heal(chat.id, user.id) }
+  }
+
+  @Test
+  fun `healing still rejects a code for the wrong timezone`() {
+    val localChatOps = ChatOps(bot, chatId, duration, 7, ZoneId.of("America/New_York"), senderChatBans, userRestrictions)
+    val command = replyingTo(message(1, from = user)).copy(date = Instant.parse("2020-01-02T15:04:00Z").epochSecond)
+
+    localChatOps.heal(command, listOf((154L * 7).toString()))
+
+    verify { userRestrictions wasNot Called }
   }
 
   @Test

@@ -9,11 +9,10 @@ import com.github.kotlintelegrambot.entities.ReplyParameters
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.Unknown
 import org.apache.commons.collections4.QueueUtils.synchronizedQueue
 import org.apache.commons.collections4.queue.CircularFifoQueue
-import java.lang.System.Logger.Level.WARNING
-import java.lang.System.getLogger
 import java.time.Duration
 import java.time.Duration.ofSeconds
 import java.time.Instant.now
+import java.time.Instant.ofEpochSecond
 import java.time.LocalTime
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentHashMap
@@ -34,7 +33,6 @@ class ChatOps(
   private val userRestrictions: UserRestrictions
 ) {
 
-  private val logger = getLogger(ChatOps::class.java.name)
   private val messagesToLifetimes = ConcurrentHashMap<Long, Long>()
   private val recentMessages = synchronizedQueue(CircularFifoQueue<Message>(12))
   private val statuettes = ConcurrentLinkedQueue<Statuette>()
@@ -56,7 +54,12 @@ class ChatOps(
     reply(m, rules, Temp(dialogLifetime))
   }
 
-  fun heal(healerMessage: Message, args: List<String>) {
+  fun heal(healerMessage: Message, args: List<String>) =
+    ActionDiagnostics.withContext("heal", healerMessage, healerMessage.replyToMessage) {
+      healTarget(healerMessage, args)
+    }
+
+  private fun healTarget(healerMessage: Message, args: List<String>) {
     val target = healerMessage.replyToMessage ?: return
     val targetId = senderId(target) ?: return
     val senderChat = target.senderChat
@@ -64,7 +67,7 @@ class ChatOps(
       return
     }
     val magicCode = extractMagicCode(args) ?: return
-    if (!isHealingCode(magicCode)) {
+    if (!isHealingCode(magicCode, healerMessage.date)) {
       markAsTemp(healerMessage)
       return
     }
@@ -88,8 +91,8 @@ class ChatOps(
     return args.singleOrNull()?.toLongOrNull()
   }
 
-  private fun isHealingCode(code: Long): Boolean {
-    val time = LocalTime.now(healingTimeZone)
+  private fun isHealingCode(code: Long, sentAt: Long): Boolean {
+    val time = LocalTime.ofInstant(ofEpochSecond(sentAt), healingTimeZone)
     val hour = time.hour
     val minute = time.minute
     // Congratulations, you've just found the secret healing code!
@@ -98,7 +101,11 @@ class ChatOps(
     return code == verification
   }
 
-  fun statuette(gunfighterMessage: Message) {
+  fun statuette(gunfighterMessage: Message) = ActionDiagnostics.withContext("statuette", gunfighterMessage, null) {
+    placeStatuette(gunfighterMessage)
+  }
+
+  private fun placeStatuette(gunfighterMessage: Message) {
     val statuetteId = reply(gunfighterMessage, "🗿", Persistent)
     if (statuetteId != null) {
       statuettes += Statuette(statuetteId, gunfighterMessage)
@@ -107,13 +114,31 @@ class ChatOps(
   }
 
   fun tryProcessStatuette(message: Message) {
-    val statuette = statuettes.poll()
+    val statuette = statuettes.peek()
     if (statuette == null) {
       recentMessages += message
       return
     }
-    bot.deleteMessage(chatId, statuette.messageId)
-    hurt(statuette.gunfighter, message, restrictionsDuration.seconds, "💥")
+    if (!isStatuetteTarget(message) || !hurt(statuette.gunfighter, message, restrictionsDuration.seconds, "💥")) {
+      return
+    }
+    // A failed restriction must not consume the trap; a failed deletion must not hit twice.
+    statuettes.poll()
+    ActionDiagnostics.withContext("statuette-hit", statuette.gunfighter, message) {
+      bot.deleteMessage(chatId, statuette.messageId).onError {
+        ActionDiagnostics.error("deleteMessage", "messageId=${statuette.messageId}; $it", (it as? Unknown)?.exception)
+      }
+    }
+  }
+
+  private fun isStatuetteTarget(message: Message): Boolean {
+    if (message.newChatMembers != null || message.leftChatMember != null || message.newChatTitle != null ||
+      message.newChatPhoto != null || message.deleteChatPhoto == true || message.groupChatCreated == true ||
+      message.supergroupChatCreated == true || message.channelChatCreated == true ||
+      message.migrateToChatId != null || message.migrateFromChatId != null) {
+      return false
+    }
+    return message.senderChat?.type == "channel" || message.senderChat == null && message.from?.isBot == false
   }
 
   fun buckshot(gunfighterMessage: Message) {
@@ -150,21 +175,28 @@ class ChatOps(
 
   private fun tryRemoveMessage(messageId: Long, epochSecond: Long) {
     if (isLifetimeExceeded(epochSecond)) {
-      bot.deleteMessage(chatId, messageId)
+      bot.deleteMessage(chatId, messageId).onError {
+        ActionDiagnostics.error("deleteMessage", "chat=$chatId messageId=$messageId; $it", (it as? Unknown)?.exception)
+      }
       messagesToLifetimes.remove(messageId)
     }
   }
 
-  private fun hurt(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String) {
+  private fun hurt(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String): Boolean =
+    ActionDiagnostics.withContext("mute", gunfighter, target) {
+      hurtTarget(gunfighter, target, restrictionsDurationSec, emoji)
+    }
+
+  private fun hurtTarget(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String): Boolean {
     val senderChat = target.senderChat
     if (senderChat != null) {
       if (senderChat.type != "channel" || !senderChatBans.ban(target.chat.id, senderChat.id, restrictionsDurationSec)) {
-        return
+        return false
       }
     } else {
-      val userId = target.from?.id ?: return
+      val userId = target.from?.id ?: return false
       if (!userRestrictions.mute(target.chat.id, userId, restrictionsDurationSec)) {
-        return
+        return false
       }
     }
     val remaining = if (senderChat != null) {
@@ -181,12 +213,9 @@ class ChatOps(
       disableNotification = true,
       messageThreadId = target.messageThreadId
     ).onError {
-      if (it is Unknown) {
-        logger.log(WARNING, "Failed to send ban log", it.exception)
-      } else {
-        logger.log(WARNING, "Failed to send ban log: $it")
-      }
+      ActionDiagnostics.error("sendMessage", "ban log; $it", (it as? Unknown)?.exception)
     }
+    return true
   }
 
   private fun mention(message: Message): String {
@@ -245,14 +274,13 @@ class ChatOps(
   private data object Persistent : ReplyLifetime
 
   private fun reply(to: Message, emoji: String, lifetime: ReplyLifetime = Temp(ofSeconds(3))): Long? {
-    val message =
-      try {
-        bot.sendMessage(
-          chatId, emoji, replyParameters = ReplyParameters(to.messageId), disableNotification = true
-        ).get()
-      } catch (e: IllegalStateException) {
-        return null
-      }
+    val result = bot.sendMessage(
+      chatId, emoji, replyParameters = ReplyParameters(to.messageId), disableNotification = true
+    )
+    result.onError {
+      ActionDiagnostics.error("sendMessage", "replyToMessageId=${to.messageId}; $it", (it as? Unknown)?.exception)
+    }
+    val message = result.getOrNull() ?: return null
     if (lifetime is Temp) {
       markAsTemp(message, lifetime.duration)
     }

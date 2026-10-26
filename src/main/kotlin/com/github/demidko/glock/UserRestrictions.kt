@@ -3,11 +3,8 @@ package com.github.demidko.glock
 import com.github.kotlintelegrambot.types.TelegramBotResult
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.HttpError
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.TelegramApi
-import com.github.kotlintelegrambot.types.TelegramBotResult.Error.Unknown
 import kotlinx.serialization.Serializable
 import java.io.IOException
-import java.lang.System.Logger.Level.WARNING
-import java.lang.System.getLogger
 import java.time.Clock
 import java.time.Clock.systemUTC
 import java.util.concurrent.ExecutionException
@@ -33,8 +30,8 @@ class UserRestrictions(
   private val storage: UserRestrictionStorage,
   private val clock: Clock = systemUTC()
 ) {
-  private val logger = getLogger(UserRestrictions::class.java.name)
   private val registryLock = Any()
+  private val persistenceLock = Any()
   private val targetLocks = Array(64) { Any() }
   private var records = storage.loadUsers()
   private var needsSave = false
@@ -76,7 +73,7 @@ class UserRestrictions(
       return@withTarget false
     }
     val result = api.restrict(chatId, userId, planned.appliedPermissions, until)
-    if (succeeded(result, "mute", target)) {
+    if (succeeded(result)) {
       if (planned.previousUntilDate != null) replace(target, planned.copy(previousUntilDate = null))
       true
     } else {
@@ -115,9 +112,7 @@ class UserRestrictions(
         }
       }
     }
-    synchronized(registryLock) {
-      if (needsSave) needsSave = !save(records)
-    }
+    flush()
   }
 
   private fun owns(saved: UserRestrictionRecord, current: UserMemberState): Boolean {
@@ -128,7 +123,7 @@ class UserRestrictions(
 
   private fun release(chatId: Long, userId: Long, target: String): Boolean {
     // Lift individual restrictions and inherit today's group defaults.
-    if (!succeeded(api.restrict(chatId, userId, MemberPermissions(), 0), "heal", target)) return false
+    if (!succeeded(api.restrict(chatId, userId, MemberPermissions(), 0))) return false
     if (record(target) != null) forget(target)
     return true
   }
@@ -148,20 +143,35 @@ class UserRestrictions(
 
   private fun record(target: String): UserRestrictionRecord? = synchronized(registryLock) { records[target] }
 
-  private fun persistPlan(target: String, planned: UserRestrictionRecord): Boolean = synchronized(registryLock) {
-    val updated = records + (target to planned)
-    if (!save(updated)) return@synchronized false
-    records = updated
-    needsSave = false
+  private fun persistPlan(target: String, planned: UserRestrictionRecord): Boolean = synchronized(persistenceLock) {
+    val snapshot = synchronized(registryLock) { records + (target to planned) }
+    if (!save(snapshot)) {
+      // A timeout may hide a published plan; maintenance must republish the authoritative state.
+      synchronized(registryLock) { needsSave = true }
+      return@synchronized false
+    }
+    synchronized(registryLock) {
+      // A different target may have been healed while this snapshot was being published.
+      records = records + (target to planned)
+      needsSave = records != snapshot
+    }
     true
   }
 
   private fun forget(target: String) = replace(target, null)
 
   private fun replace(target: String, value: UserRestrictionRecord?) = synchronized(registryLock) {
-    // The observed result remains authoritative in memory even when publishing it needs a retry.
+    // A confirmed Telegram result is visible immediately; maintenance publishes the journal later.
     records = if (value == null) records - target else records + (target to value)
-    needsSave = !save(records)
+    needsSave = true
+  }
+
+  private fun flush() = synchronized(persistenceLock) {
+    val snapshot = synchronized(registryLock) { records.takeIf { needsSave } } ?: return@synchronized
+    val saved = save(snapshot)
+    synchronized(registryLock) {
+      needsSave = !saved || records != snapshot
+    }
   }
 
   private fun save(updated: Map<String, UserRestrictionRecord>): Boolean {
@@ -170,28 +180,21 @@ class UserRestrictions(
       true
     } catch (e: InterruptedException) {
       Thread.currentThread().interrupt()
-      logger.log(WARNING, "Interrupted while saving user restrictions", e)
+      ActionDiagnostics.error("storage.saveUsers", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: IOException) {
-      logger.log(WARNING, "Failed to save user restrictions", e)
+      ActionDiagnostics.error("storage.saveUsers", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: ExecutionException) {
-      logger.log(WARNING, "Failed to save user restrictions", e)
+      ActionDiagnostics.error("storage.saveUsers", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: IllegalStateException) {
-      logger.log(WARNING, "Failed to save user restrictions", e)
+      ActionDiagnostics.error("storage.saveUsers", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     }
   }
 
-  private fun succeeded(result: TelegramBotResult<Boolean>, action: String, target: String): Boolean = result.fold(
-    ifSuccess = { it },
-    ifError = {
-      if (it is Unknown) logger.log(WARNING, "Failed to $action user $target", it.exception)
-      else logger.log(WARNING, "Failed to $action user $target: $it")
-      false
-    }
-  )
+  private fun succeeded(result: TelegramBotResult<Boolean>): Boolean = result.getOrNull() == true
 
   private inline fun <T> withTarget(chatId: Long, userId: Long, action: (String) -> T): T {
     val target = "$chatId:$userId"

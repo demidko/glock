@@ -3,10 +3,7 @@ package com.github.demidko.glock
 import com.github.kotlintelegrambot.types.TelegramBotResult
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.HttpError
 import com.github.kotlintelegrambot.types.TelegramBotResult.Error.TelegramApi
-import com.github.kotlintelegrambot.types.TelegramBotResult.Error.Unknown
 import java.io.IOException
-import java.lang.System.Logger.Level.WARNING
-import java.lang.System.getLogger
 import java.lang.Thread.currentThread
 import java.time.Clock
 import java.time.Clock.systemUTC
@@ -17,101 +14,112 @@ class SenderChatBans(
   private val storage: BanStorage,
   private val clock: Clock = systemUTC()
 ) {
-  private val logger = getLogger(SenderChatBans::class.java.name)
+  private val registryLock = Any()
+  private val persistenceLock = Any()
+  private val targetLocks = Array(64) { Any() }
   private var deadlines = storage.load()
   private var needsSave = false
 
-  @Synchronized
-  fun ban(chatId: Long, senderChatId: Long, durationSeconds: Long): Boolean {
-    val target = "$chatId:$senderChatId"
-    val previous = deadlines
-    val until = maxOf(deadlines[target] ?: 0, clock.instant().epochSecond) + durationSeconds
-    // Record before Telegram receives the ban: a timeout may hide a successful request.
-    if (!save(deadlines + (target to until))) {
-      return false
-    }
-    val result = api.ban(chatId, senderChatId)
-    if (succeeded(result, "ban", target)) {
-      val appliedUntil = maxOf(previous[target] ?: 0, clock.instant().epochSecond) + durationSeconds
-      if (appliedUntil != until) {
-        deadlines = deadlines + (target to appliedUntil)
-        needsSave = true
+  fun ban(chatId: Long, senderChatId: Long, durationSeconds: Long): Boolean =
+    withTarget(chatId, senderChatId) { target ->
+      val previous = deadline(target)
+      val until = maxOf(previous ?: 0, clock.instant().epochSecond) + durationSeconds
+      // Record before Telegram receives the ban: a timeout may hide a successful request.
+      if (!persistPlan(target, until)) return@withTarget false
+      val result = api.ban(chatId, senderChatId)
+      if (succeeded(result)) {
+        val appliedUntil = maxOf(previous ?: 0, clock.instant().epochSecond) + durationSeconds
+        if (appliedUntil != until) replace(target, appliedUntil)
+        return@withTarget true
       }
-      return true
+      if (result is TelegramApi || result is HttpError && result.httpCode in 400..499 && result.httpCode != 408) {
+        replace(target, previous)
+        // Channels have no readable individual ban state; persist a definite rejection before returning.
+        flush()
+      }
+      false
     }
-    if (result is TelegramApi || result is HttpError && result.httpCode in 400..499 && result.httpCode != 408) {
-      deadlines = previous
-      needsSave = !save(previous)
-    }
-    return false
+
+  fun unban(chatId: Long, senderChatId: Long): Boolean = withTarget(chatId, senderChatId) { target ->
+    if (!succeeded(api.unban(chatId, senderChatId))) return@withTarget false
+    if (deadline(target) != null) replace(target, null)
+    true
   }
 
-  @Synchronized
-  fun unban(chatId: Long, senderChatId: Long): Boolean {
-    val target = "$chatId:$senderChatId"
-    if (!succeeded(api.unban(chatId, senderChatId), "unban", target)) {
-      return false
-    }
-    if (target in deadlines) {
-      deadlines = deadlines - target
-      needsSave = !save(deadlines)
-    }
-    return true
-  }
-
-  @Synchronized
   fun remainingSeconds(chatId: Long, senderChatId: Long): Long {
-    return ((deadlines["$chatId:$senderChatId"] ?: 0) - clock.instant().epochSecond).coerceAtLeast(0)
+    return ((deadline("$chatId:$senderChatId") ?: 0) - clock.instant().epochSecond).coerceAtLeast(0)
   }
 
-  @Synchronized
   fun unbanExpired() {
-    val expired = deadlines.filterValues { it <= clock.instant().epochSecond }
-    for (target in expired.keys) {
+    val expired = synchronized(registryLock) {
+      deadlines.filterValues { it <= clock.instant().epochSecond }.keys.toList()
+    }
+    for (target in expired) {
       val (chatId, senderChatId) = target.split(':', limit = 2)
-      if (succeeded(api.unban(chatId.toLong(), senderChatId.toLong()), "unban", target)) {
-        deadlines = deadlines - target
+      withTarget(chatId.toLong(), senderChatId.toLong()) {
+        val current = deadline(target) ?: return@withTarget
+        if (current <= clock.instant().epochSecond &&
+          succeeded(api.unban(chatId.toLong(), senderChatId.toLong()))) {
+          replace(target, null)
+        }
+      }
+    }
+    flush()
+  }
+
+  private fun deadline(target: String): Long? = synchronized(registryLock) { deadlines[target] }
+
+  private fun persistPlan(target: String, until: Long): Boolean = synchronized(persistenceLock) {
+    val snapshot = synchronized(registryLock) { deadlines + (target to until) }
+    val saved = save(snapshot)
+    synchronized(registryLock) {
+      if (saved) {
+        // A different target may have been healed while this snapshot was being uploaded.
+        deadlines = deadlines + (target to until)
+        needsSave = deadlines != snapshot
+      } else {
+        // A failed publication may still have reached Telegram; repair it on the next cleanup.
         needsSave = true
       }
     }
-    if (needsSave) {
-      save(deadlines)
-    }
+    saved
   }
 
-  private fun succeeded(result: TelegramBotResult<Boolean>, action: String, target: String): Boolean {
-    return result.fold(
-      ifSuccess = { it },
-      ifError = {
-        val message = "Failed to $action sender chat $target"
-        if (it is Unknown) {
-          logger.log(WARNING, message, it.exception)
-        } else {
-          logger.log(WARNING, "$message: $it")
-        }
-        false
-      }
-    )
+  private fun replace(target: String, until: Long?) = synchronized(registryLock) {
+    deadlines = if (until == null) deadlines - target else deadlines + (target to until)
+    needsSave = true
   }
+
+  private fun flush() = synchronized(persistenceLock) {
+    val snapshot = synchronized(registryLock) { if (needsSave) deadlines else null }
+      ?: return@synchronized
+    val saved = save(snapshot)
+    synchronized(registryLock) { needsSave = !saved || deadlines != snapshot }
+  }
+
+  private inline fun <T> withTarget(chatId: Long, senderChatId: Long, action: (String) -> T): T {
+    val target = "$chatId:$senderChatId"
+    return synchronized(targetLocks[target.hashCode().and(Int.MAX_VALUE) % targetLocks.size]) { action(target) }
+  }
+
+  private fun succeeded(result: TelegramBotResult<Boolean>): Boolean = result.getOrNull() == true
 
   private fun save(updated: Map<String, Long>): Boolean {
     return try {
       storage.save(updated)
-      deadlines = updated
-      needsSave = false
       true
     } catch (e: IOException) {
-      logger.log(WARNING, "Failed to save sender chat bans", e)
+      ActionDiagnostics.error("storage.save", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: ExecutionException) {
-      logger.log(WARNING, "Failed to save sender chat bans", e)
+      ActionDiagnostics.error("storage.save", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: IllegalStateException) {
-      logger.log(WARNING, "Failed to save sender chat bans", e)
+      ActionDiagnostics.error("storage.save", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     } catch (e: InterruptedException) {
       currentThread().interrupt()
-      logger.log(WARNING, "Interrupted while saving sender chat bans", e)
+      ActionDiagnostics.error("storage.save", "entries=${updated.size} targets=${updated.keys.take(20)}", e)
       false
     }
   }

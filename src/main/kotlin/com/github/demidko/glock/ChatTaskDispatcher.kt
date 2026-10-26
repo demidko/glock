@@ -1,7 +1,5 @@
 package com.github.demidko.glock
 
-import java.lang.System.Logger.Level.ERROR
-import java.lang.System.getLogger
 import java.util.ArrayDeque
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.locks.ReentrantLock
@@ -50,7 +48,7 @@ internal class ChatTaskDispatcher : AutoCloseable {
       try {
         action()
       } catch (failure: Throwable) {
-        getLogger(ChatTaskDispatcher::class.java.name).log(ERROR, "Chat $chatId action failed", failure)
+        ActionDiagnostics.error("chatDispatcher", "chat_id=$chatId action failed", failure)
       }
     }
   }

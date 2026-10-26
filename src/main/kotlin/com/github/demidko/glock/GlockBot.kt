@@ -63,9 +63,22 @@ class GlockBot(
   private val idToChatOps = ConcurrentHashMap<Long, ChatOps>()
 
   fun cleanTempMessages() {
-    userRestrictions.restoreExpired()
-    senderChatBans.unbanExpired()
-    forEachChat(ChatOps::cleanTempMessages)
+    cleanSafely("userRestrictions") { userRestrictions.restoreExpired() }
+    cleanSafely("senderChatBans") { senderChatBans.unbanExpired() }
+    forEachChat { operations ->
+      cleanSafely("temporaryMessages") { operations.cleanTempMessages() }
+    }
+  }
+
+  private fun cleanSafely(operation: String, action: () -> Unit) {
+    try {
+      action()
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw e
+    } catch (e: Exception) {
+      ActionDiagnostics.error(operation, "Cleanup failed; other cleanup tasks can continue", e)
+    }
   }
 
   fun startPolling() {

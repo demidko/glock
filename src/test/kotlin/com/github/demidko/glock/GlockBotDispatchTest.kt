@@ -13,6 +13,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.unmockkConstructor
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -35,6 +36,29 @@ class GlockBotDispatchTest {
     // Exercise the library's real filtering/registration order without starting network polling.
     dispatcher::class.declaredMemberFunctions.single { it.name == "handleUpdate" }
       .apply { isAccessible = true }.callSuspend(dispatcher, update)
+  }
+
+  @Test
+  fun `a failed user cleanup does not skip temporary message cleanup`() {
+    mockkConstructor(Bot::class)
+    try {
+      every { anyConstructed<Bot>().getChat(any()) } returns
+        Success(mockk<ChatFullInfo> { every { description } returns null })
+      val restrictions = mockk<UserRestrictions>()
+      every { restrictions.restoreExpired() } throws IllegalStateException("Temporary failure")
+      val glock = GlockBot("test-token", ofSeconds(300), 0, UTC, emptySet(), -999, restrictions)
+      val operations = mockk<ChatOps>()
+      every { operations.cleanTempMessages() } returns Unit
+      @Suppress("UNCHECKED_CAST")
+      val chats = field(glock, "idToChatOps") as MutableMap<Long, ChatOps>
+      chats[-10042] = operations
+
+      glock.cleanTempMessages()
+
+      verify(exactly = 1) { operations.cleanTempMessages() }
+    } finally {
+      unmockkConstructor(Bot::class)
+    }
   }
 
   @Test

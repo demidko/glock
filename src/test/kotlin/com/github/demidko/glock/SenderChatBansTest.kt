@@ -124,16 +124,58 @@ class SenderChatBansTest {
   }
 
   @Test
-  fun `healing removes the persisted deadline`() {
+  fun `healing removes the deadline and cleanup persists it`() {
     val bans = bans()
     bans.ban(chatId, senderChatId, 300)
 
     assertThat(bans.unban(chatId, senderChatId)).isTrue()
+    bans.unbanExpired()
     now = 2_000
     bans().unbanExpired()
 
     verify(exactly = 1) { api.unban(chatId, senderChatId) }
     assertThat(storage.saved).isEmpty()
+  }
+
+  @Test
+  fun `confirmed healing returns without saving a snapshot`() {
+    val bans = bans()
+    bans.ban(chatId, senderChatId, 300)
+    val writes = storage.writes
+    storage.onSave = { error("Healing must not wait for storage") }
+
+    assertThat(bans.unban(chatId, senderChatId)).isTrue()
+    assertThat(bans.remainingSeconds(chatId, senderChatId)).isEqualTo(0)
+    assertThat(storage.writes).isEqualTo(writes)
+
+    storage.onSave = {}
+    bans.unbanExpired()
+    assertThat(storage.saved).isEmpty()
+  }
+
+  @Test
+  fun `another channel snapshot cannot delay or resurrect a healed ban`() {
+    val bans = bans()
+    bans.ban(chatId, senderChatId, 300)
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    storage.onSave = { entered.countDown(); check(release.await(5, SECONDS)) }
+    val executor = newFixedThreadPool(2)
+    try {
+      val writing = executor.submit(Callable { bans.ban(chatId, senderChatId - 1, 300) })
+      assertThat(entered.await(5, SECONDS)).isTrue()
+      val healing = executor.submit(Callable { bans.unban(chatId, senderChatId) })
+      assertThat(healing.get(1, SECONDS)).isTrue()
+      assertThat(bans.remainingSeconds(chatId, senderChatId)).isEqualTo(0)
+      release.countDown()
+      assertThat(writing.get(5, SECONDS)).isTrue()
+      storage.onSave = {}
+      bans.unbanExpired()
+      assertThat(storage.saved).containsExactly("$chatId:${senderChatId - 1}", 1300L)
+    } finally {
+      release.countDown()
+      executor.shutdownNow()
+    }
   }
 
   @Test
@@ -223,6 +265,7 @@ class SenderChatBansTest {
     now = 1_100
 
     assertThat(bans.ban(chatId, senderChatId, 300)).isFalse()
+    bans.unbanExpired()
 
     assertThat(storage.saved.values).containsExactly(1_300L)
   }
