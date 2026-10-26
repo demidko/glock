@@ -27,14 +27,14 @@ then the hunter:
 Administrators are armoured: Telegram refuses to restrict them, so the bullet ricochets, with equal chances back
 into the hunter, into a random author of the last twelve messages, or into thin air. The shield faces the gun and
 takes the explosion. Everyone the bullet met stands on the left, separated by dots, each with their state; a puff at
-the shield means the bullet went nowhere. Nothing ever vanishes silently:
+the shield is the ricochet, and the rest of the line says where the bullet went. Nothing ever vanishes silently:
 
 ```
-@bystander🤐5m · @admin🛡️  💥🔫 @hunter   the bullet flew on into a bystander
-@admin🛡️  💥🔫 @hunter🤐5m             it came back into the hunter
-@admin🛡️💨  💥🔫 @hunter             it puffed away: a miss, or the bystander was armoured too
-@admin🛡️  💥🔫                         an armoured hunter shooting their own message
-@admin🛡️  💥🗿 @hunter🤐5m             a statuette stepped on by armour hits whoever placed it
+@bystander🤐5m · @admin🛡️💨  💥🔫 @hunter   the bullet flew on into a bystander
+@admin🛡️💨  💥🔫 @hunter🤐5m             it came back into the hunter
+@admin🛡️💨  💥🔫 @hunter                 it found nobody: a miss, or the bystander was armoured too
+@admin🛡️  💥🔫                           an armoured hunter shooting their own message: no ricochet
+@admin🛡️💨  💥🗿 @hunter🤐5m             a statuette stepped on by armour hits whoever placed it
 ```
 
 Buckshot pellets ricochet one by one. The kill feed line is sent together with the restriction and edited when a

@@ -171,23 +171,18 @@ class Glock(
     val victims = hits.filterIndexed { index, _ -> applied[index].get() }.toMutableList()
     val armour = hits.filterIndexed { index, _ -> !applied[index].get() }
     var self: Hit? = null
-    var missed = false
+    var bounced = false
     for (shield in armour) {
       if (shield.targetId == hunter.senderId) continue
+      bounced = true
       val outcome = if (bounceToHunter) Ricochet.HUNTER else ricochet()
+      if (outcome == Ricochet.MISS) continue
       val bystander = if (outcome == Ricochet.BYSTANDER) bystander(hunter, shield.targetId) else null
-      if (outcome == Ricochet.MISS) {
-        missed = true
-        continue
-      }
       val bounce = reserve(bystander ?: hunter, shield.added) ?: continue
-      if (!bounce.apply()) {
-        missed = true
-        continue
-      }
+      if (!bounce.apply()) continue
       if (bystander != null) victims += bounce else self = self?.also { it.added += bounce.added } ?: bounce
     }
-    val line = feed(hunter, victims, armour.map { it.target }, self, missed, weapon)
+    val line = feed(hunter, victims, armour.map { it.target }, self, bounced, weapon)
     val earlyId = early?.get()
     when {
       earlyId == null -> tg.send(hunter.chatId, line, threadId)
@@ -216,17 +211,17 @@ class Glock(
 
   /**
    * `@victim🤐5m+5m  💥🔫 @hunter`: everyone the bullet met, each with their state, then two spaces, the explosion
-   * glued to the muzzle, and the hunter. `@bystander🤐5m · @admin🛡️  💥🔫 @hunter` when armour sent it on,
-   * `@admin🛡️  💥🔫 @hunter🤐5m` when it came back, `@admin🛡️💨  💥🔫 @hunter` when it puffed away.
+   * glued to the muzzle, and the hunter. A puff at the shield is a ricochet; the rest of the line says where it went:
+   * `@bystander🤐5m · @admin🛡️💨  💥🔫 @hunter`, `@admin🛡️💨  💥🔫 @hunter🤐5m`, or nowhere: `@admin🛡️💨  💥🔫 @hunter`.
    */
-  private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, missed: Boolean, weapon: String): String {
+  private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, bounced: Boolean, weapon: String): String {
     val merged = LinkedHashMap<Long, Hit>()
     for (hit in hits) merged[hit.targetId]?.let { it.added += hit.added } ?: merged.put(hit.targetId, Hit(hit.target, hit.targetId, hit.prior, hit.added, hit.apply))
     val met = merged.values.map { "${mention(it.target)}🤐${time(it)}" } + armour.distinctBy { it.senderId }.map { "${mention(it)}🛡️" }
     // Shooting your own message, or your own armour, leaves nobody at the grip.
     val own = self == null && (merged.isNotEmpty() && merged.keys.all { it == hunter.senderId } || armour.any { it.senderId == hunter.senderId })
     val grip = (if (own) "" else " ${mention(hunter)}") + (self?.let { "🤐${time(it)}" } ?: "")
-    return "${met.joinToString(" · ")}${if (missed) "💨" else ""}  💥$weapon$grip"
+    return "${met.joinToString(" · ")}${if (bounced) "💨" else ""}  💥$weapon$grip"
   }
 
   private fun time(hit: Hit) = if (hit.prior >= 60) "${minutes(hit.prior)}+${minutes(hit.added)}" else minutes(hit.added)
