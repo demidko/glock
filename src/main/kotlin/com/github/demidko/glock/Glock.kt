@@ -75,8 +75,8 @@ class Glock(
 
   private class Statuette(val messageId: Long, val placer: Msg)
 
-  /** One reserved hit: [apply] sends the restriction to Telegram. */
-  private class Hit(val target: Msg, val targetId: Long, val prior: Long, var added: Long, val apply: () -> Boolean)
+  /** One reserved hit: [apply] sends the restriction to Telegram; [armoured] targets are refused without asking. */
+  private class Hit(val target: Msg, val targetId: Long, val prior: Long, var added: Long, val armoured: Boolean = false, val apply: () -> Boolean)
 
   fun handle(m: Msg) {
     try {
@@ -166,7 +166,8 @@ class Glock(
   ): Boolean {
     val hits = shots.mapNotNull { (target, seconds) -> reserve(target, seconds) }
     if (hits.isEmpty()) return false
-    val early = if (logAfterHits) null else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, emptyList(), null, false, weapon), threadId) })
+    val early = if (logAfterHits || hits.all(Hit::armoured)) null
+    else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, emptyList(), null, false, weapon), threadId) })
     val applied: List<Future<Boolean>> = hits.map { pool.submit(Callable(it.apply)) }
     val victims = hits.filterIndexed { index, _ -> applied[index].get() }.toMutableList()
     val armour = hits.filterIndexed { index, _ -> !applied[index].get() }
@@ -197,8 +198,9 @@ class Glock(
     ?.randomOrNull()
 
   private fun reserve(target: Msg, seconds: Long): Hit? {
-    if (target.senderChat != null && !target.isChannelPost) return null
     val id = target.senderId ?: return null
+    // Anonymous administrators post as the group itself, and no chat can be restricted: armour by definition.
+    if (target.senderChat != null && !target.isChannelPost) return Hit(target, id, 0, seconds, armoured = true) { false }
     val chatId = target.chatId
     return if (target.isChannelPost) {
       val plan = bans.reserveChannel(chatId, id, seconds)
@@ -216,7 +218,7 @@ class Glock(
    */
   private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, bounced: Boolean, weapon: String): String {
     val merged = LinkedHashMap<Long, Hit>()
-    for (hit in hits) merged[hit.targetId]?.let { it.added += hit.added } ?: merged.put(hit.targetId, Hit(hit.target, hit.targetId, hit.prior, hit.added, hit.apply))
+    for (hit in hits) merged[hit.targetId]?.let { it.added += hit.added } ?: merged.put(hit.targetId, Hit(hit.target, hit.targetId, hit.prior, hit.added, hit.armoured, hit.apply))
     val met = merged.values.map { "${mention(it.target)}🤐${time(it)}" } + armour.distinctBy { it.senderId }.map { "${mention(it)}🛡️" }
     // Shooting your own message, or your own armour, leaves nobody at the grip.
     val own = self == null && (merged.isNotEmpty() && merged.keys.all { it == hunter.senderId } || armour.any { it.senderId == hunter.senderId })
@@ -238,6 +240,7 @@ class Glock(
   private fun mention(m: Msg): String {
     val channel = m.senderChat
     if (channel != null) {
+      if (channel["id"].asLong == m.chatId) return escape(channel["title"]?.asString?.takeIf(String::isNotBlank) ?: "anonymous")
       val username = channel["username"]?.asString?.takeIf(String::isNotBlank)
       if (username != null) return link("https://t.me/$username", "@$username")
       val title = channel["title"]?.asString?.takeIf(String::isNotBlank)

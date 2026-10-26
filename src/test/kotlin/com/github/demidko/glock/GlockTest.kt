@@ -236,15 +236,16 @@ class GlockTest {
   }
 
   @Test
-  fun `anonymous administrators cannot be targeted`() {
-    val group = JsonObject().apply { addProperty("id", CHAT); addProperty("type", "supergroup") }
+  fun `anonymous administrators are armour under the group's name`() {
+    val group = JsonObject().apply { addProperty("id", CHAT); addProperty("type", "supergroup"); addProperty("title", "Range <1>") }
     val post = message(1, user(1087968824, first = "Group"), "anon", senderChat = group)
 
     glock.handle(message(2, hunter, "/shoot", replyTo = post))
 
-    assertThat(tg.sent).isEmpty()
-    assertThat(tg.restricted).isEmpty()
     assertThat(tg.banned).isEmpty()
+    assertThat(tg.restricted.single().userId).isEqualTo(22)
+    assertThat(tg.sent.single().text).isEqualTo("Range &lt;1&gt;🛡️💨  💥🔫 $hunterLink🤐5m")
+    assertThat(tg.edits).isEmpty()
   }
 
   @Test

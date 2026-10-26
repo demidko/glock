@@ -10,8 +10,8 @@ also `/help`.
 Reply to a message with `/shoot` to mute its author for the configured duration (5 minutes by default). `/buckshot`
 hits a random handful of recent authors for random durations. `/statuette` leaves a 🗿 that mutes the next member who
 writes. Messages sent on behalf of channels can be hit too; their ban has no timer in Telegram, so Glock keeps the
-deadline itself. The bot needs administrator rights to restrict members. Anonymous group administrators cannot be
-targeted, and Telegram refuses to restrict administrators.
+deadline itself. The bot needs administrator rights to restrict members. Telegram refuses to restrict administrators, and anonymous
+administrators post as the group itself, which cannot be restricted at all: both are armour, see below.
 
 Every hit leaves a short, silent kill feed line. The muted side comes first, then after two spaces the explosion glued to the muzzle,
 then the hunter:
@@ -24,7 +24,8 @@ then the hunter:
 @hunter🤐5m  💥🔫                   shooting your own message leaves nobody at the grip
 ```
 
-Administrators are armoured: Telegram refuses to restrict them, so the bullet ricochets, with equal chances back
+Administrators are armoured, anonymous ones under the group's name: Telegram refuses to restrict them, so the bullet
+ricochets, with equal chances back
 into the hunter, into a random author of the last twelve messages, or into thin air. The shield faces the gun and
 takes the explosion. Everyone the bullet met stands on the left, separated by dots, each with their state; a puff at
 the shield is the ricochet, and the rest of the line says where the bullet went. Nothing ever vanishes silently:
