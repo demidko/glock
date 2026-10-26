@@ -14,10 +14,10 @@ class GlockTest {
   private val tg = FakeTelegram()
   private var now = 1_000L
   private val bans = Bans(tg, STORAGE) { now }
-  private var backAtHunter = true
-  private val glock = Glock(tg, bans, Config(seconds = 300, healingConstant = 7, zone = UTC)) { backAtHunter }
+  private var ricochet = Ricochet.HUNTER
+  private val glock = Glock(tg, bans, Config(seconds = 300, healingConstant = 7, zone = UTC)) { ricochet }
   private val admin = user(44, "admin")
-  private val adminLink = "<a href=\"tg://user?id=44\">@admin</a>"
+  private val shield = "<a href=\"tg://user?id=44\">@admin</a>🛡️"
   private val hunter = user(22, "hunter")
   private val victim = user(11, "victim")
   private val victimLink = "<a href=\"tg://user?id=11\">@victim</a>"
@@ -81,18 +81,18 @@ class GlockTest {
 
     assertThat(tg.restricted.single().userId).isEqualTo(22)
     assertThat(tg.restricted.single().until).isEqualTo(1_300)
-    assertThat(tg.sent.single().text).isEqualTo("$adminLink 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.single().text).isEqualTo("<a href=\"tg://user?id=44\">@admin</a> 🤐5m 💥🔫 $hunterLink")
     val edit = tg.edits.single()
     assertThat(edit.first).isEqualTo(tg.sent.single().id)
-    assertThat(edit.second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink 🤐5m")
+    assertThat(edit.second).isEqualTo("$shield💥🔫 $hunterLink 🤐5m")
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
-    assertThat(tg.edits.last().second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink 🤐5m+5m")
+    assertThat(tg.edits.last().second).isEqualTo("$shield💥🔫 $hunterLink 🤐5m+5m")
   }
 
   @Test
   fun `a ricochet can hit a bystander and misses when the bystander is armoured too`() {
     tg.refuse = setOf(44)
-    backAtHunter = false
+    ricochet = Ricochet.BYSTANDER
     val other = user(33, "other")
     glock.handle(message(1, other, "just passing by"))
     val target = message(2, admin, "I am armoured")
@@ -100,13 +100,25 @@ class GlockTest {
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted.single().userId).isEqualTo(33)
-    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a> 🤐5m 💥🛡 $adminLink 🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a> 🤐5m $shield💥🔫 $hunterLink")
 
     tg.refuse = setOf(44, 33)
     glock.handle(message(4, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted).hasSize(1)
-    assertThat(tg.edits.last().second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("💨 $shield💥🔫 $hunterLink")
+  }
+
+  @Test
+  fun `a ricochet can miss everyone`() {
+    tg.refuse = setOf(44)
+    ricochet = Ricochet.MISS
+    glock.handle(message(1, victim, "around"))
+
+    glock.handle(message(3, hunter, "/shoot", replyTo = message(2, admin, "I am armoured")))
+
+    assertThat(tg.restricted).isEmpty()
+    assertThat(tg.edits.single().second).isEqualTo("💨 $shield💥🔫 $hunterLink")
   }
 
   @Test
@@ -116,20 +128,20 @@ class GlockTest {
     glock.handle(message(2, admin, "/shoot", replyTo = message(1, admin, "mine")))
 
     assertThat(tg.restricted).isEmpty()
-    assertThat(tg.edits.single().second).isEqualTo("🛡 $adminLink 💥🔫")
+    assertThat(tg.edits.single().second).isEqualTo("$shield💥🔫")
   }
 
   @Test
   fun `a statuette stepped on by armour ricochets into its placer and is consumed`() {
     tg.refuse = setOf(44)
-    backAtHunter = false
+    ricochet = Ricochet.MISS
     glock.handle(message(1, hunter, "/statuette"))
     val statuette = tg.sent.single()
 
     glock.handle(message(2, admin, "stomp"))
 
     assertThat(tg.restricted.single().userId).isEqualTo(22)
-    assertThat(tg.edits.single().second).isEqualTo("🛡 $adminLink 💥🗿 $hunterLink 🤐5m")
+    assertThat(tg.edits.single().second).isEqualTo("$shield💥🗿 $hunterLink 🤐5m")
     await { statuette.id in tg.deleted }
     glock.handle(message(3, victim, "safe now"))
     assertThat(tg.restricted).hasSize(1)

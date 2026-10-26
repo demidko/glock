@@ -11,10 +11,12 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor
 import java.util.concurrent.Future
-import kotlin.random.Random.Default.nextBoolean
 import kotlin.random.Random.Default.nextInt
 import kotlin.random.Random.Default.nextLong
 import kotlin.time.Duration
+
+/** Where a bullet goes after striking armour. */
+enum class Ricochet { HUNTER, BYSTANDER, MISS }
 
 class Config(
   val seconds: Long = 300,
@@ -64,8 +66,7 @@ class Glock(
   private val tg: Telegram,
   private val bans: Bans,
   private val config: Config,
-  /** Whether a ricochet flies back into the hunter rather than into a bystander. */
-  private val backAtHunter: () -> Boolean = { nextBoolean() }
+  private val ricochet: () -> Ricochet = { Ricochet.entries.random() }
 ) {
   private val pool = newVirtualThreadPerTaskExecutor()
   private val recent = ConcurrentHashMap<Long, ArrayDeque<Msg>>()
@@ -165,19 +166,28 @@ class Glock(
   ): Boolean {
     val hits = shots.mapNotNull { (target, seconds) -> reserve(target, seconds) }
     if (hits.isEmpty()) return false
-    val early = if (logAfterHits) null else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, emptyList(), null, weapon), threadId) })
+    val early = if (logAfterHits) null else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, emptyList(), null, false, weapon), threadId) })
     val applied: List<Future<Boolean>> = hits.map { pool.submit(Callable(it.apply)) }
     val victims = hits.filterIndexed { index, _ -> applied[index].get() }.toMutableList()
     val armour = hits.filterIndexed { index, _ -> !applied[index].get() }
     var self: Hit? = null
+    var missed = false
     for (shield in armour) {
       if (shield.targetId == hunter.senderId) continue
-      val bystander = if (bounceToHunter || backAtHunter()) null else bystander(hunter, shield.targetId)
+      val outcome = if (bounceToHunter) Ricochet.HUNTER else ricochet()
+      val bystander = if (outcome == Ricochet.BYSTANDER) bystander(hunter, shield.targetId) else null
+      if (outcome == Ricochet.MISS) {
+        missed = true
+        continue
+      }
       val bounce = reserve(bystander ?: hunter, shield.added) ?: continue
-      if (!bounce.apply()) continue
+      if (!bounce.apply()) {
+        missed = true
+        continue
+      }
       if (bystander != null) victims += bounce else self = self?.also { it.added += bounce.added } ?: bounce
     }
-    val line = feed(hunter, victims, armour.map { it.target }, self, weapon)
+    val line = feed(hunter, victims, armour.map { it.target }, self, missed, weapon)
     val earlyId = early?.get()
     when {
       earlyId == null -> tg.send(hunter.chatId, line, threadId)
@@ -206,22 +216,20 @@ class Glock(
 
   /**
    * `@victim 🤐5m+5m 💥🔫 @hunter`: what was left plus what this hit added, minutes only, pellets merged by victim.
-   * Armour shows where the bullet struck: `@bystander 🤐5m 💥🛡 @admin 🔫 @hunter` when it flew on,
-   * `🛡 @admin 💥🔫 @hunter 🤐5m` when it came back, `🛡 @admin 💥🔫 @hunter` when it hit nobody.
+   * Armour faces the gun and takes the explosion; to its left is where the bullet went: `@bystander 🤐5m @admin🛡️💥🔫 @hunter`,
+   * `💨 @admin🛡️💥🔫 @hunter` for a miss, and `@admin🛡️💥🔫 @hunter 🤐5m` when it came back into the hunter.
    */
-  private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, weapon: String): String {
+  private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, missed: Boolean, weapon: String): String {
     val merged = LinkedHashMap<Long, Hit>()
     for (hit in hits) merged[hit.targetId]?.let { it.added += hit.added } ?: merged.put(hit.targetId, Hit(hit.target, hit.targetId, hit.prior, hit.added, hit.apply))
     val victims = merged.values.joinToString(" · ") { "${mention(it.target)} 🤐${time(it)}" }
-    val shields = armour.distinctBy { it.senderId }.joinToString(" ") { "🛡 ${mention(it)}" }
+    val shields = armour.distinctBy { it.senderId }.joinToString(" ") { "${mention(it)}🛡️" }
     // Shooting your own message, or your own armour, leaves nobody at the grip.
     val own = self == null && (merged.isNotEmpty() && merged.keys.all { it == hunter.senderId } || armour.any { it.senderId == hunter.senderId })
     val grip = (if (own) "" else " ${mention(hunter)}") + (self?.let { " 🤐${time(it)}" } ?: "")
-    return when {
-      armour.isEmpty() -> "$victims 💥$weapon$grip"
-      victims.isNotEmpty() -> "$victims 💥$shields $weapon$grip"
-      else -> "$shields 💥$weapon$grip"
-    }
+    if (armour.isEmpty()) return "$victims 💥$weapon$grip"
+    val flight = listOfNotNull(victims.takeIf(String::isNotEmpty), "💨".takeIf { missed }).joinToString(" ")
+    return "${if (flight.isEmpty()) "" else "$flight "}$shields💥$weapon$grip"
   }
 
   private fun time(hit: Hit) = if (hit.prior >= 60) "${minutes(hit.prior)}+${minutes(hit.added)}" else minutes(hit.added)
