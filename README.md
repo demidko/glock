@@ -10,11 +10,14 @@ also `/help`.
 Messages sent on behalf of channels can also be hit by `/shoot`, `/buckshot`, and `/statuette`, and healed with
 `/heal`. The bot needs administrator rights to restrict members. Anonymous group administrators cannot be targeted.
 
-Successful hits leave a short, silent log in the chat: `💥 @shooter → @target — 5m`.
-The duration is the total remaining mute time, including earlier hits; seconds are shown when needed (`5m 30s`).
+Successful hits leave a short, silent log in the chat: `🤐5m @target 💥🔫 @shooter`. The muzzle points at the
+muted side. The duration is the total remaining mute time, including earlier hits; seconds are shown when needed
+(`5m 30s`), and a hit that extended an existing mute also shows its own addition (`🤐10m (+5m)`).
+A buckshot volley is one line with a duration beside each victim: `🤐3m @a · 🤐7m @b 💥💥🔫 @shooter`.
+Shooting your own message leaves nobody at the grip: `🤐5m @you 💥🔫`.
 User labels link to their Telegram IDs; public channel labels link to their usernames.
-Channels without a username are shown by title and ID. Statuette hits name the person who placed the statuette.
-Ban logs remain in the chat history. A statuette remains armed until a restriction succeeds; failed hits,
+Channels without a username are shown by title and ID. Statuette hits use `💥🗿` and name the person who placed
+the statuette. Ban logs remain in the chat history. A statuette remains armed until a restriction succeeds; failed hits,
 bots, anonymous administrators and basic service messages do not consume it.
 
 Shots restrict only sending messages, media, polls, stickers and link previews. Reactions, member tag editing,

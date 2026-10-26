@@ -20,6 +20,11 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.random.Random.Default.nextInt
 import kotlin.random.Random.Default.nextLong
 
+// The muzzle of 🔫 points left in every major emoji set, so the muted side always precedes the weapon.
+private const val PISTOL = "💥🔫"
+private const val STATUETTE = "💥🗿"
+private const val BUCKSHOT = "💥💥🔫"
+
 /**
  * Class for sequential, secure, atomic operations in a single chat
  */
@@ -38,6 +43,15 @@ class ChatOps(
   private val statuettes = ConcurrentLinkedQueue<Statuette>()
 
   private data class Statuette(val messageId: Long, val gunfighter: Message)
+
+  /** One successful restriction: [remaining] is the whole mute left, [added] is what this hit contributed. */
+  private data class Hit(
+    val targetId: Long,
+    val label: String,
+    val remaining: Long,
+    val added: Long,
+    val extended: Boolean
+  )
 
   fun cleanTempMessages() {
     val tempMessagesCount = messagesToLifetimes.mappingCount()
@@ -119,9 +133,10 @@ class ChatOps(
       recentMessages += message
       return
     }
-    if (!isStatuetteTarget(message) || !hurt(statuette.gunfighter, message, restrictionsDuration.seconds, "💥")) {
+    if (!isStatuetteTarget(message)) {
       return
     }
+    val hit = hit(statuette.gunfighter, message, restrictionsDuration.seconds) ?: return
     // A failed restriction must not consume the trap; a failed deletion must not hit twice.
     statuettes.poll()
     ActionDiagnostics.withContext("statuette-hit", statuette.gunfighter, message) {
@@ -129,6 +144,7 @@ class ChatOps(
         ActionDiagnostics.error("deleteMessage", "messageId=${statuette.messageId}; $it", (it as? Unknown)?.exception)
       }
     }
+    report(statuette.gunfighter, STATUETTE, listOf(hit), message.messageThreadId)
   }
 
   private fun isStatuetteTarget(message: Message): Boolean {
@@ -148,28 +164,31 @@ class ChatOps(
       markAsTemp(gunfighterMessage)
       return
     }
-    val emoji = setOf("💥", "🗯️", "⚡️")
+    val hits = mutableListOf<Hit>()
     if (targetMessages.size == 1) {
-      hurt(gunfighterMessage, targetMessages.random(), restrictionsDuration.seconds, emoji.random())
-      markAsTemp(gunfighterMessage)
-      return
+      hit(gunfighterMessage, targetMessages.random(), restrictionsDuration.seconds)?.let(hits::add)
+    } else {
+      val targetsCount = nextInt(2, targetMessages.size + 1)
+      for (t in 1..targetsCount) {
+        val target = targetMessages.random()
+        val restrictionsDurationSec = nextLong(60, restrictionsDuration.seconds * 2 + 1)
+        hit(gunfighterMessage, target, restrictionsDurationSec)?.let(hits::add)
+      }
     }
-    val targetsCount = nextInt(2, targetMessages.size + 1)
-    for (t in 1..targetsCount) {
-      val target = targetMessages.random()
-      val restrictionsDurationSec = nextLong(60, restrictionsDuration.seconds * 2 + 1)
-      hurt(gunfighterMessage, target, restrictionsDurationSec, emoji.random())
+    if (hits.isNotEmpty()) {
+      // The volley is one line in the shooter's topic; pellets may have hit messages in other topics.
+      report(gunfighterMessage, BUCKSHOT, mergeByTarget(hits), gunfighterMessage.messageThreadId)
     }
     markAsTemp(gunfighterMessage)
   }
 
   fun shoot(gunfighterMessage: Message) {
     val target = gunfighterMessage.replyToMessage
-    if (target == null) {
-      markAsTemp(gunfighterMessage)
-      return
+    if (target != null) {
+      hit(gunfighterMessage, target, restrictionsDuration.seconds)?.let { hit ->
+        report(gunfighterMessage, PISTOL, listOf(hit), target.messageThreadId)
+      }
     }
-    hurt(gunfighterMessage, target, restrictionsDuration.seconds, "💥")
     markAsTemp(gunfighterMessage)
   }
 
@@ -182,40 +201,66 @@ class ChatOps(
     }
   }
 
-  private fun hurt(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String): Boolean =
+  private fun hit(gunfighter: Message, target: Message, restrictionsDurationSec: Long): Hit? =
     ActionDiagnostics.withContext("mute", gunfighter, target) {
-      hurtTarget(gunfighter, target, restrictionsDurationSec, emoji)
+      hitTarget(target, restrictionsDurationSec)
     }
 
-  private fun hurtTarget(gunfighter: Message, target: Message, restrictionsDurationSec: Long, emoji: String): Boolean {
+  private fun hitTarget(target: Message, restrictionsDurationSec: Long): Hit? {
     val senderChat = target.senderChat
+    val targetId: Long
+    val remaining: Long
     if (senderChat != null) {
       if (senderChat.type != "channel" || !senderChatBans.ban(target.chat.id, senderChat.id, restrictionsDurationSec)) {
-        return false
+        return null
       }
+      targetId = senderChat.id
+      remaining = senderChatBans.remainingSeconds(target.chat.id, senderChat.id)
     } else {
-      val userId = target.from?.id ?: return false
-      if (!userRestrictions.mute(target.chat.id, userId, restrictionsDurationSec)) {
-        return false
+      targetId = target.from?.id ?: return null
+      if (!userRestrictions.mute(target.chat.id, targetId, restrictionsDurationSec)) {
+        return null
+      }
+      remaining = userRestrictions.remainingSeconds(target.chat.id, targetId)
+    }
+    // The registry already counts this hit; anything beyond it was left from earlier hits.
+    return Hit(targetId, mention(target), remaining, restrictionsDurationSec, extended = remaining > restrictionsDurationSec)
+  }
+
+  private fun mergeByTarget(hits: List<Hit>): List<Hit> {
+    val merged = LinkedHashMap<Long, Hit>()
+    for (hit in hits) {
+      merged.merge(hit.targetId, hit) { first, next ->
+        first.copy(remaining = next.remaining, added = first.added + next.added)
       }
     }
-    val remaining = if (senderChat != null) {
-      senderChatBans.remainingSeconds(target.chat.id, senderChat.id)
-    } else {
-      userRestrictions.remainingSeconds(target.chat.id, checkNotNull(target.from).id)
+    return merged.values.toList()
+  }
+
+  private fun report(gunfighter: Message, weapon: String, hits: List<Hit>, threadId: Long?) {
+    ActionDiagnostics.withContext("hit-log", gunfighter, null) {
+      bot.sendMessage(
+        chatId,
+        describe(gunfighter, weapon, hits),
+        parseMode = HTML,
+        linkPreviewOptions = LinkPreviewOptions(isDisabled = true),
+        disableNotification = true,
+        messageThreadId = threadId
+      ).onError {
+        ActionDiagnostics.error("sendMessage", "hit log; $it", (it as? Unknown)?.exception)
+      }
     }
-    val text = "$emoji ${mention(gunfighter)} → ${mention(target)} — ${formatDuration(remaining)}"
-    bot.sendMessage(
-      chatId,
-      text,
-      parseMode = HTML,
-      linkPreviewOptions = LinkPreviewOptions(isDisabled = true),
-      disableNotification = true,
-      messageThreadId = target.messageThreadId
-    ).onError {
-      ActionDiagnostics.error("sendMessage", "ban log; $it", (it as? Unknown)?.exception)
+  }
+
+  private fun describe(gunfighter: Message, weapon: String, hits: List<Hit>): String {
+    val victims = hits.joinToString(" · ") { hit ->
+      val addition = if (hit.extended) " (+${formatDuration(hit.added)})" else ""
+      "🤐${formatDuration(hit.remaining)}$addition ${hit.label}"
     }
-    return true
+    // Shooting your own message leaves nobody at the grip.
+    val shooterId = senderId(gunfighter)
+    val shooter = if (hits.all { it.targetId == shooterId }) "" else " ${mention(gunfighter)}"
+    return "$victims $weapon$shooter"
   }
 
   private fun mention(message: Message): String {

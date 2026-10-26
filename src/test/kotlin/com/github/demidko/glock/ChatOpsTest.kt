@@ -38,6 +38,10 @@ class ChatOpsTest {
   private val gunfighter = User(id = 22, isBot = false, firstName = "Gunfighter", username = "gunfighter")
   private val fakeUser = User(id = 136817688, isBot = true, firstName = "Channel_Bot")
   private val duration = ofSeconds(300)
+  private val gunfighterLink = "<a href=\"tg://user?id=22\">@gunfighter</a>"
+  private val userLink = "<a href=\"tg://user?id=11\">User</a>"
+  private val channelOneLink = "<a href=\"https://t.me/channel_one\">@channel_one</a>"
+  private val channelTwoLink = "<a href=\"https://t.me/channel_two\">@channel_two</a>"
   private val bot = mockk<Bot>()
   private val senderChatBans = mockk<SenderChatBans>()
   private val userRestrictions = mockk<UserRestrictions>()
@@ -179,20 +183,7 @@ class ChatOpsTest {
 
     verify(exactly = 1) { senderChatBans.ban(chat.id, otherChannel.id, duration.seconds) }
     verify(exactly = 0) { senderChatBans.ban(chat.id, channel.id, any()) }
-    verify(exactly = 1) {
-      bot.sendMessage(
-        chatId,
-        match {
-          it.substringBefore(' ') in setOf("💥", "🗯️", "⚡️") &&
-            it.substringAfter(' ') ==
-            "<a href=\"https://t.me/channel_one\">@channel_one</a> → " +
-            "<a href=\"https://t.me/channel_two\">@channel_two</a> — 5m"
-        },
-        parseMode = HTML,
-        linkPreviewOptions = LinkPreviewOptions(isDisabled = true),
-        disableNotification = true
-      )
-    }
+    verifyBanLog("🤐5m $channelTwoLink 💥💥🔫 $channelOneLink")
     verifyNoUserRestriction()
   }
 
@@ -229,10 +220,7 @@ class ChatOpsTest {
 
     verify(exactly = 1) { bot.deleteMessage(chatId, 999) }
     verify(exactly = 1) { senderChatBans.ban(chat.id, channel.id, duration.seconds) }
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=11\">User</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m"
-    )
+    verifyBanLog("🤐5m $channelOneLink 💥🗿 $userLink")
     verifyNoUserRestriction()
   }
 
@@ -347,8 +335,8 @@ class ChatOpsTest {
     chatOps.shoot(message(100, from = shooter).copy(replyToMessage = message(1, from = victim)))
 
     verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">Alex &lt;&amp;&gt; &quot;one&quot;</a> → " +
-        "<a href=\"tg://user?id=11\">Alex &lt;&amp;&gt; &quot;one&quot;</a> — 5m"
+      "🤐5m <a href=\"tg://user?id=11\">Alex &lt;&amp;&gt; &quot;one&quot;</a> 💥🔫 " +
+        "<a href=\"tg://user?id=22\">Alex &lt;&amp;&gt; &quot;one&quot;</a>"
     )
   }
 
@@ -359,10 +347,7 @@ class ChatOpsTest {
 
     chatOps.shoot(replyingTo(message(1, from = victim)))
 
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"tg://user?id=11\">11</a> — 5m"
-    )
+    verifyBanLog("🤐5m <a href=\"tg://user?id=11\">11</a> 💥🔫 $gunfighterLink")
   }
 
   @Test
@@ -372,9 +357,7 @@ class ChatOpsTest {
 
     chatOps.shoot(replyingTo(message(1, from = fakeUser, senderChat = privateChannel)))
 
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → Private &lt;channel&gt; (-100101) — 5m"
-    )
+    verifyBanLog("🤐5m Private &lt;channel&gt; (-100101) 💥🔫 $gunfighterLink")
     verifyNoUserRestriction()
   }
 
@@ -385,24 +368,26 @@ class ChatOpsTest {
 
     chatOps.shoot(replyingTo(target))
 
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m",
-      threadId = 77
-    )
+    verifyBanLog("🤐5m $channelOneLink 💥🔫 $gunfighterLink", threadId = 77)
   }
 
   @Test
-  fun `user hit log includes seconds in the total remaining duration`() {
+  fun `user hit log includes seconds in the total remaining duration and shows the addition`() {
     allowUserRestriction()
     every { userRestrictions.remainingSeconds(chat.id, user.id) } returns 330
 
     chatOps.shoot(replyingTo(message(1, from = user)))
 
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"tg://user?id=11\">User</a> — 5m 30s"
-    )
+    verifyBanLog("🤐5m 30s (+5m) $userLink 💥🔫 $gunfighterLink")
+  }
+
+  @Test
+  fun `shooting your own message leaves nobody at the grip`() {
+    allowUserRestriction(gunfighter)
+
+    chatOps.shoot(replyingTo(message(1, from = gunfighter)))
+
+    verifyBanLog("🤐5m $gunfighterLink 💥🔫")
   }
 
   @Test
@@ -412,10 +397,7 @@ class ChatOpsTest {
 
     chatOps.shoot(replyingTo(message(1, senderChat = channel)))
 
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 10m 30s"
-    )
+    verifyBanLog("🤐10m 30s (+5m) $channelOneLink 💥🔫 $gunfighterLink")
   }
 
   @Test
@@ -475,7 +457,7 @@ class ChatOpsTest {
   }
 
   @Test
-  fun `multiple buckshot hits log the shooter and total remaining duration`() {
+  fun `multiple buckshot hits on one target log one volley with the total remaining duration`() {
     val durations = mutableListOf<Long>()
     val logs = mutableListOf<String>()
     var remaining = 0L
@@ -495,19 +477,36 @@ class ChatOpsTest {
 
     chatOps.buckshot(message(3, senderChat = channel))
 
-    assertThat(logs).hasSize(2)
     assertThat(durations).hasSize(2)
-    var expectedRemaining = 0L
-    for ((log, seconds) in logs.zip(durations)) {
-      expectedRemaining += seconds
-      assertThat(log).contains(
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> → " +
-          "<a href=\"https://t.me/channel_two\">@channel_two</a>"
+    val total = durations.sum()
+    val seconds = if (total % 60 > 0) " ${total % 60}s" else ""
+    assertThat(logs).containsExactly("🤐${total / 60}m$seconds $channelTwoLink 💥💥🔫 $channelOneLink")
+  }
+
+  @Test
+  fun `buckshot volley logs each victim once with its own duration in the shooter's topic`() {
+    chatOps.tryProcessStatuette(message(1, from = user))
+    chatOps.tryProcessStatuette(message(2, senderChat = otherChannel))
+    every { userRestrictions.mute(chat.id, user.id, any()) } returns true
+    every { senderChatBans.ban(chat.id, otherChannel.id, any()) } returns true
+    val logs = mutableListOf<String>()
+    every {
+      bot.sendMessage(
+        chatId, capture(logs), parseMode = HTML,
+        linkPreviewOptions = LinkPreviewOptions(isDisabled = true), disableNotification = true, messageThreadId = 5
       )
-      val match = Regex("(?:(\\d+)m)?(?: ?(\\d+)s)?").matchEntire(log.substringAfterLast(" — "))!!
-      val minutes = match.groupValues[1].toLongOrNull() ?: 0
-      val remainingSeconds = match.groupValues[2].toLongOrNull() ?: 0
-      assertThat(minutes * 60 + remainingSeconds).isEqualTo(expectedRemaining)
+    } returns Success(message(1000))
+
+    chatOps.buckshot(message(3, from = gunfighter).copy(messageThreadId = 5))
+
+    val suffix = " 💥💥🔫 $gunfighterLink"
+    val log = logs.single()
+    assertThat(log).endsWith(suffix)
+    val victims = log.removeSuffix(suffix).split(" · ")
+    assertThat(victims).containsNoDuplicates()
+    val victim = Regex("🤐5m( \\(\\+\\d+m( \\d+s)?\\))? (${Regex.escape(userLink)}|${Regex.escape(channelTwoLink)})")
+    for (entry in victims) {
+      assertThat(entry).matches(victim.pattern)
     }
   }
 
@@ -592,10 +591,7 @@ class ChatOpsTest {
     chatOps.shoot(replyingTo(target))
 
     verify(exactly = 1) { senderChatBans.ban(chat.id, channel.id, duration.seconds) }
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"https://t.me/channel_one\">@channel_one</a> — 5m"
-    )
+    verifyBanLog("🤐5m $channelOneLink 💥🔫 $gunfighterLink")
     verifyNoUserRestriction()
   }
 
@@ -606,10 +602,7 @@ class ChatOpsTest {
     chatOps.shoot(replyingTo(target))
 
     verify(exactly = 1) { userRestrictions.mute(chat.id, user.id, duration.seconds) }
-    verifyBanLog(
-      "💥 <a href=\"tg://user?id=22\">@gunfighter</a> → " +
-        "<a href=\"tg://user?id=11\">User</a> — 10m"
-    )
+    verifyBanLog("🤐10m (+5m) $userLink 💥🔫 $gunfighterLink")
     verify { senderChatBans wasNot Called }
   }
 
