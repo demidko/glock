@@ -11,6 +11,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor
 import java.util.concurrent.Future
+import kotlin.random.Random.Default.nextBoolean
 import kotlin.random.Random.Default.nextInt
 import kotlin.random.Random.Default.nextLong
 import kotlin.time.Duration
@@ -59,7 +60,13 @@ private fun every(millis: Long, action: () -> Unit) {
 }
 
 /** The commands, their effects, and the kill feed. One instance serves every chat. */
-class Glock(private val tg: Telegram, private val bans: Bans, private val config: Config) {
+class Glock(
+  private val tg: Telegram,
+  private val bans: Bans,
+  private val config: Config,
+  /** Whether a ricochet flies back into the hunter rather than into a bystander. */
+  private val backAtHunter: () -> Boolean = { nextBoolean() }
+) {
   private val pool = newVirtualThreadPerTaskExecutor()
   private val recent = ConcurrentHashMap<Long, ArrayDeque<Msg>>()
   private val statuettes = ConcurrentHashMap<Long, ConcurrentLinkedQueue<Statuette>>()
@@ -123,7 +130,7 @@ class Glock(private val tg: Telegram, private val bans: Bans, private val config
     val queue = statuettes[m.chatId] ?: return false
     val statuette = queue.peek() ?: return false
     if (m.isService || !(m.isChannelPost || m.senderChat == null && !m.isBot)) return false
-    if (!fire(statuette.placer, listOf(m to config.seconds), "🗿", m.threadId)) return false
+    if (!fire(statuette.placer, listOf(m to config.seconds), "🗿", m.threadId, bounceToHunter = true)) return false
     if (queue.remove(statuette)) pool.execute { tg.delete(m.chatId, statuette.messageId) }
     return true
   }
@@ -150,20 +157,39 @@ class Glock(private val tg: Telegram, private val bans: Bans, private val config
   /**
    * Reserves every shot in memory, then sends the restrictions and the kill feed line at once, so a hit costs
    * one round trip. With [logAfterHits] the line waits for the restrictions and names only the confirmed ones.
+   * A refused restriction is armour: the bullet ricochets into the hunter or a bystander, and the line is edited.
    */
-  private fun fire(hunter: Msg, shots: List<Pair<Msg, Long>>, weapon: String, threadId: Long?, logAfterHits: Boolean = false): Boolean {
+  private fun fire(
+    hunter: Msg, shots: List<Pair<Msg, Long>>, weapon: String, threadId: Long?,
+    logAfterHits: Boolean = false, bounceToHunter: Boolean = false
+  ): Boolean {
     val hits = shots.mapNotNull { (target, seconds) -> reserve(target, seconds) }
     if (hits.isEmpty()) return false
-    val early = if (logAfterHits) null else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, weapon), threadId) })
+    val early = if (logAfterHits) null else pool.submit(Callable { tg.send(hunter.chatId, feed(hunter, hits, emptyList(), null, weapon), threadId) })
     val applied: List<Future<Boolean>> = hits.map { pool.submit(Callable(it.apply)) }
-    val confirmed = hits.filterIndexed { index, _ -> applied[index].get() }
-    if (confirmed.isEmpty()) {
-      early?.get()?.let { tg.delete(hunter.chatId, it) }
-      return false
+    val victims = hits.filterIndexed { index, _ -> applied[index].get() }.toMutableList()
+    val armour = hits.filterIndexed { index, _ -> !applied[index].get() }
+    var self: Hit? = null
+    for (shield in armour) {
+      if (shield.targetId == hunter.senderId) continue
+      val bystander = if (bounceToHunter || backAtHunter()) null else bystander(hunter, shield.targetId)
+      val bounce = reserve(bystander ?: hunter, shield.added) ?: continue
+      if (!bounce.apply()) continue
+      if (bystander != null) victims += bounce else self = self?.also { it.added += bounce.added } ?: bounce
     }
-    if (early == null) tg.send(hunter.chatId, feed(hunter, confirmed, weapon), threadId) else early.get()
+    val line = feed(hunter, victims, armour.map { it.target }, self, weapon)
+    val earlyId = early?.get()
+    when {
+      earlyId == null -> tg.send(hunter.chatId, line, threadId)
+      armour.isNotEmpty() -> tg.edit(hunter.chatId, earlyId, line)
+    }
     return true
   }
+
+  /** A random recent author of the chat other than the armoured target and the hunter. */
+  private fun bystander(hunter: Msg, armouredId: Long): Msg? = recent[hunter.chatId]?.let { synchronized(it) { it.toList() } }
+    ?.filter { it.senderId != null && it.senderId != armouredId && it.senderId != hunter.senderId && (it.senderChat == null || it.isChannelPost) }
+    ?.randomOrNull()
 
   private fun reserve(target: Msg, seconds: Long): Hit? {
     if (target.senderChat != null && !target.isChannelPost) return null
@@ -178,17 +204,27 @@ class Glock(private val tg: Telegram, private val bans: Bans, private val config
     }
   }
 
-  /** `@victim 🤐5m+5m 💥🔫 @hunter`: what was left plus what this hit added, minutes only, pellets merged by victim. */
-  private fun feed(hunter: Msg, hits: List<Hit>, weapon: String): String {
+  /**
+   * `@victim 🤐5m+5m 💥🔫 @hunter`: what was left plus what this hit added, minutes only, pellets merged by victim.
+   * Armour shows where the bullet struck: `@bystander 🤐5m 💥🛡 @admin 🔫 @hunter` when it flew on,
+   * `🛡 @admin 💥🔫 @hunter 🤐5m` when it came back, `🛡 @admin 💥🔫 @hunter` when it hit nobody.
+   */
+  private fun feed(hunter: Msg, hits: List<Hit>, armour: List<Msg>, self: Hit?, weapon: String): String {
     val merged = LinkedHashMap<Long, Hit>()
     for (hit in hits) merged[hit.targetId]?.let { it.added += hit.added } ?: merged.put(hit.targetId, Hit(hit.target, hit.targetId, hit.prior, hit.added, hit.apply))
-    val victims = merged.values.joinToString(" · ") { hit ->
-      val time = if (hit.prior >= 60) "${minutes(hit.prior)}+${minutes(hit.added)}" else minutes(hit.added)
-      "${mention(hit.target)} 🤐$time"
+    val victims = merged.values.joinToString(" · ") { "${mention(it.target)} 🤐${time(it)}" }
+    val shields = armour.distinctBy { it.senderId }.joinToString(" ") { "🛡 ${mention(it)}" }
+    // Shooting your own message, or your own armour, leaves nobody at the grip.
+    val own = self == null && (merged.isNotEmpty() && merged.keys.all { it == hunter.senderId } || armour.any { it.senderId == hunter.senderId })
+    val grip = (if (own) "" else " ${mention(hunter)}") + (self?.let { " 🤐${time(it)}" } ?: "")
+    return when {
+      armour.isEmpty() -> "$victims 💥$weapon$grip"
+      victims.isNotEmpty() -> "$victims 💥$shields $weapon$grip"
+      else -> "$shields 💥$weapon$grip"
     }
-    val self = merged.keys.all { it == hunter.senderId }
-    return if (self) "$victims 💥$weapon" else "$victims 💥$weapon ${mention(hunter)}"
   }
+
+  private fun time(hit: Hit) = if (hit.prior >= 60) "${minutes(hit.prior)}+${minutes(hit.added)}" else minutes(hit.added)
 
   private fun minutes(seconds: Long): String = buildString {
     val days = seconds / 86400

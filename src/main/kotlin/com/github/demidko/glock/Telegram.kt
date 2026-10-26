@@ -53,8 +53,10 @@ open class Telegram(token: String, apiUrl: String = "https://api.telegram.org") 
     "reply_parameters" to replyTo?.let { "{\"message_id\":$it}" }
   )?.asJsonObject?.get("message_id")?.asLong
 
-  open fun edit(chatId: Long, messageId: Long, text: String): Boolean =
-    call(http, "editMessageText", "chat_id" to chatId, "message_id" to messageId, "text" to text) != null
+  open fun edit(chatId: Long, messageId: Long, html: String): Boolean = call(
+    http, "editMessageText", "chat_id" to chatId, "message_id" to messageId, "text" to html, "parse_mode" to "HTML",
+    "link_preview_options" to "{\"is_disabled\":true}"
+  ) != null
 
   open fun pin(chatId: Long, messageId: Long): Boolean =
     call(http, "pinChatMessage", "chat_id" to chatId, "message_id" to messageId, "disable_notification" to true) != null

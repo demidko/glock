@@ -24,6 +24,21 @@ then the hunter:
 @hunter 🤐5m 💥🔫                   shooting your own message leaves nobody at the grip
 ```
 
+Administrators are armoured: Telegram refuses to restrict them, so the bullet ricochets, half the time back into the
+hunter and half the time into a random author of the last twelve messages. The explosion sits where the bullet
+struck; nothing ever vanishes silently:
+
+```
+@bystander 🤐5m 💥🛡 @admin 🔫 @hunter   the bullet flew on into a bystander
+🛡 @admin 💥🔫 @hunter 🤐5m            it came back into the hunter
+🛡 @admin 💥🔫 @hunter                 it hit nobody: the bystander was armoured too
+🛡 @admin 💥🔫                         an armoured hunter shooting their own message
+🛡 @admin 💥🗿 @hunter 🤐5m            a statuette stepped on by armour hits whoever placed it
+```
+
+Buckshot pellets ricochet one by one. The kill feed line is sent together with the restriction and edited when a
+ricochet changes it.
+
 Durations are whole minutes, hours and days (`1h30m`, `2d3h`); seconds are never shown, and less than a minute
 left counts as nothing. User labels link to their Telegram IDs, public channels link to their usernames, other
 channels are shown by title and ID.
@@ -39,8 +54,8 @@ the command's send time.
 Speed is the first priority; the cost of a mistake in a toy gun is about zero.
 
 - Every update is handled at once on its own virtual thread. Nothing queues behind an earlier shot.
-- A shot costs one round trip to Telegram: the restriction and the kill feed line are sent at the same time, and
-  the line is deleted if Telegram refuses the restriction. Buckshot pellets fly in parallel.
+- A shot costs one round trip to Telegram: the restriction and the kill feed line are sent at the same time.
+  Buckshot pellets fly in parallel. Only a ricochet costs a second round trip, for the bounce and the edited line.
 - Nothing is read from Telegram before a shot. Deadlines live in memory; the group's default permissions are read
   once per chat and cached for five minutes, prefetched when a chat is first seen.
 - One HTTP client serves everything and is pinged every 30 seconds, so the first shot after a lull pays no handshake.

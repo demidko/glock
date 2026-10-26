@@ -14,7 +14,10 @@ class GlockTest {
   private val tg = FakeTelegram()
   private var now = 1_000L
   private val bans = Bans(tg, STORAGE) { now }
-  private val glock = Glock(tg, bans, Config(seconds = 300, healingConstant = 7, zone = UTC))
+  private var backAtHunter = true
+  private val glock = Glock(tg, bans, Config(seconds = 300, healingConstant = 7, zone = UTC)) { backAtHunter }
+  private val admin = user(44, "admin")
+  private val adminLink = "<a href=\"tg://user?id=44\">@admin</a>"
   private val hunter = user(22, "hunter")
   private val victim = user(11, "victim")
   private val victimLink = "<a href=\"tg://user?id=11\">@victim</a>"
@@ -70,17 +73,66 @@ class GlockTest {
   }
 
   @Test
-  fun `a refused restriction deletes the feed line and leaves no record`() {
-    tg.refuse = setOf(11)
-    val target = message(1, victim, "hi")
-    glock.handle(message(2, hunter, "/shoot", replyTo = target))
-    assertThat(tg.restricted).isEmpty()
-    await { tg.sent.single().id in tg.deleted }
+  fun `armour bounces the bullet back into the hunter and the early line is edited`() {
+    tg.refuse = setOf(44)
+    val target = message(1, admin, "I am armoured")
 
-    tg.refuse = emptySet()
+    glock.handle(message(2, hunter, "/shoot", replyTo = target))
+
+    assertThat(tg.restricted.single().userId).isEqualTo(22)
+    assertThat(tg.restricted.single().until).isEqualTo(1_300)
+    assertThat(tg.sent.single().text).isEqualTo("$adminLink 🤐5m 💥🔫 $hunterLink")
+    val edit = tg.edits.single()
+    assertThat(edit.first).isEqualTo(tg.sent.single().id)
+    assertThat(edit.second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink 🤐5m")
+    glock.handle(message(3, hunter, "/shoot", replyTo = target))
+    assertThat(tg.edits.last().second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink 🤐5m+5m")
+  }
+
+  @Test
+  fun `a ricochet can hit a bystander and misses when the bystander is armoured too`() {
+    tg.refuse = setOf(44)
+    backAtHunter = false
+    val other = user(33, "other")
+    glock.handle(message(1, other, "just passing by"))
+    val target = message(2, admin, "I am armoured")
+
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
 
-    assertThat(tg.sent.last().text).isEqualTo("$victimLink 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.restricted.single().userId).isEqualTo(33)
+    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a> 🤐5m 💥🛡 $adminLink 🔫 $hunterLink")
+
+    tg.refuse = setOf(44, 33)
+    glock.handle(message(4, hunter, "/shoot", replyTo = target))
+
+    assertThat(tg.restricted).hasSize(1)
+    assertThat(tg.edits.last().second).isEqualTo("🛡 $adminLink 💥🔫 $hunterLink")
+  }
+
+  @Test
+  fun `an armoured hunter shooting their own message gets a bare shield`() {
+    tg.refuse = setOf(44)
+
+    glock.handle(message(2, admin, "/shoot", replyTo = message(1, admin, "mine")))
+
+    assertThat(tg.restricted).isEmpty()
+    assertThat(tg.edits.single().second).isEqualTo("🛡 $adminLink 💥🔫")
+  }
+
+  @Test
+  fun `a statuette stepped on by armour ricochets into its placer and is consumed`() {
+    tg.refuse = setOf(44)
+    backAtHunter = false
+    glock.handle(message(1, hunter, "/statuette"))
+    val statuette = tg.sent.single()
+
+    glock.handle(message(2, admin, "stomp"))
+
+    assertThat(tg.restricted.single().userId).isEqualTo(22)
+    assertThat(tg.edits.single().second).isEqualTo("🛡 $adminLink 💥🗿 $hunterLink 🤐5m")
+    await { statuette.id in tg.deleted }
+    glock.handle(message(3, victim, "safe now"))
+    assertThat(tg.restricted).hasSize(1)
   }
 
   @Test
@@ -131,18 +183,6 @@ class GlockTest {
     await { statuette.id in tg.deleted }
     glock.handle(message(5, victim, "again"))
     assertThat(tg.restricted).hasSize(1)
-  }
-
-  @Test
-  fun `a refused statuette hit keeps the trap armed`() {
-    glock.handle(message(1, hunter, "/statuette"))
-    tg.refuse = setOf(11)
-    glock.handle(message(2, victim, "admin walks in"))
-    tg.refuse = emptySet()
-
-    glock.handle(message(3, victim, "member walks in"))
-
-    assertThat(tg.restricted.single().userId).isEqualTo(11)
   }
 
   @Test
@@ -245,6 +285,7 @@ class FakeTelegram : Telegram("token") {
   val deleted = CopyOnWriteArrayList<Long>()
   val banned = CopyOnWriteArrayList<Long>()
   val unbanned = CopyOnWriteArrayList<Long>()
+  val edits = CopyOnWriteArrayList<Pair<Long, String>>()
   var refuse = setOf<Long>()
   var onSend: () -> Unit = {}
   var onRestrict: () -> Unit = {}
@@ -266,8 +307,8 @@ class FakeTelegram : Telegram("token") {
     onSend()
     return ids.incrementAndGet().also { sent += Sent(it, chatId, html, threadId, replyTo) }
   }
-  override fun edit(chatId: Long, messageId: Long, text: String): Boolean {
-    pinnedText = text
+  override fun edit(chatId: Long, messageId: Long, html: String): Boolean {
+    if (messageId == pinnedId) pinnedText = html else edits += messageId to html
     return true
   }
   override fun pin(chatId: Long, messageId: Long): Boolean {
