@@ -30,7 +30,7 @@ class GlockTest {
 
     glock.handle(message(2, hunter, "/shoot", replyTo = target))
 
-    assertThat(tg.sent.map { it.text }).containsExactly("$victimLink 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.map { it.text }).containsExactly("$victimLink🤐5m  💥🔫 $hunterLink")
     val restriction = tg.restricted.single()
     assertThat(restriction.userId).isEqualTo(11)
     assertThat(restriction.until).isEqualTo(1_300)
@@ -48,7 +48,7 @@ class GlockTest {
 
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
 
-    assertThat(tg.sent.last().text).isEqualTo("$victimLink 🤐3m+5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.last().text).isEqualTo("$victimLink🤐3m+5m  💥🔫 $hunterLink")
     assertThat(tg.restricted.last().until).isEqualTo(1_600)
   }
 
@@ -56,11 +56,11 @@ class GlockTest {
   fun `seconds are dropped and hours and days are compact`() {
     val target = message(1, victim, "hi")
     Glock(tg, bans, Config(seconds = 5_400, zone = UTC)).handle(message(2, hunter, "/shoot", replyTo = target))
-    assertThat(tg.sent.last().text).startsWith("$victimLink 🤐1h30m 💥🔫")
+    assertThat(tg.sent.last().text).startsWith("$victimLink🤐1h30m  💥🔫")
 
     now += 5_400 - 50
     Glock(tg, bans, Config(seconds = 2 * 86_400 + 3 * 3_600, zone = UTC)).handle(message(3, hunter, "/shoot", replyTo = target))
-    assertThat(tg.sent.last().text).startsWith("$victimLink 🤐2d3h 💥🔫")
+    assertThat(tg.sent.last().text).startsWith("$victimLink🤐2d3h  💥🔫")
   }
 
   @Test
@@ -69,7 +69,7 @@ class GlockTest {
 
     glock.handle(message(2, hunter, "/shoot", replyTo = own))
 
-    assertThat(tg.sent.single().text).isEqualTo("$hunterLink 🤐5m 💥🔫")
+    assertThat(tg.sent.single().text).isEqualTo("$hunterLink🤐5m  💥🔫")
   }
 
   @Test
@@ -81,12 +81,12 @@ class GlockTest {
 
     assertThat(tg.restricted.single().userId).isEqualTo(22)
     assertThat(tg.restricted.single().until).isEqualTo(1_300)
-    assertThat(tg.sent.single().text).isEqualTo("<a href=\"tg://user?id=44\">@admin</a> 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.single().text).isEqualTo("<a href=\"tg://user?id=44\">@admin</a>🤐5m  💥🔫 $hunterLink")
     val edit = tg.edits.single()
     assertThat(edit.first).isEqualTo(tg.sent.single().id)
-    assertThat(edit.second).isEqualTo("$shield 💥🔫 $hunterLink 🤐5m")
+    assertThat(edit.second).isEqualTo("$shield  💥🔫 $hunterLink🤐5m")
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
-    assertThat(tg.edits.last().second).isEqualTo("$shield 💥🔫 $hunterLink 🤐5m+5m")
+    assertThat(tg.edits.last().second).isEqualTo("$shield  💥🔫 $hunterLink🤐5m+5m")
   }
 
   @Test
@@ -100,13 +100,13 @@ class GlockTest {
     glock.handle(message(3, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted.single().userId).isEqualTo(33)
-    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a> 🤐5m $shield 💥🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("<a href=\"tg://user?id=33\">@other</a>🤐5m $shield  💥🔫 $hunterLink")
 
     tg.refuse = setOf(44, 33)
     glock.handle(message(4, hunter, "/shoot", replyTo = target))
 
     assertThat(tg.restricted).hasSize(1)
-    assertThat(tg.edits.last().second).isEqualTo("$shield💨 💥🔫 $hunterLink")
+    assertThat(tg.edits.last().second).isEqualTo("$shield💨  💥🔫 $hunterLink")
   }
 
   @Test
@@ -118,7 +118,7 @@ class GlockTest {
     glock.handle(message(3, hunter, "/shoot", replyTo = message(2, admin, "I am armoured")))
 
     assertThat(tg.restricted).isEmpty()
-    assertThat(tg.edits.single().second).isEqualTo("$shield💨 💥🔫 $hunterLink")
+    assertThat(tg.edits.single().second).isEqualTo("$shield💨  💥🔫 $hunterLink")
   }
 
   @Test
@@ -128,7 +128,7 @@ class GlockTest {
     glock.handle(message(2, admin, "/shoot", replyTo = message(1, admin, "mine")))
 
     assertThat(tg.restricted).isEmpty()
-    assertThat(tg.edits.single().second).isEqualTo("$shield 💥🔫")
+    assertThat(tg.edits.single().second).isEqualTo("$shield  💥🔫")
   }
 
   @Test
@@ -141,7 +141,7 @@ class GlockTest {
     glock.handle(message(2, admin, "stomp"))
 
     assertThat(tg.restricted.single().userId).isEqualTo(22)
-    assertThat(tg.edits.single().second).isEqualTo("$shield 💥🗿 $hunterLink 🤐5m")
+    assertThat(tg.edits.single().second).isEqualTo("$shield  💥🗿 $hunterLink🤐5m")
     await { statuette.id in tg.deleted }
     glock.handle(message(3, victim, "safe now"))
     assertThat(tg.restricted).hasSize(1)
@@ -168,8 +168,8 @@ class GlockTest {
     glock.handle(message(6, hunter, "/buckshot"))
 
     val line = tg.sent.single().text
-    assertThat(line).endsWith(" 💥🔫 $hunterLink")
-    assertThat(line).doesNotContain("@hunter</a> 🤐")
+    assertThat(line).endsWith("  💥🔫 $hunterLink")
+    assertThat(line).doesNotContain("@hunter</a>🤐")
     assertThat(tg.restricted.map { it.userId }.toSet()).isEqualTo(line.split(" · ").map { if ("@victim" in it) 11L else 33L }.toSet())
     assertThat(tg.restricted.none { it.userId == 22L }).isTrue()
     // Two to four pellets of 60..600 seconds each may land on the same victim and stack.
@@ -191,7 +191,7 @@ class GlockTest {
     glock.handle(message(4, victim, "walks in"))
 
     assertThat(tg.restricted.single().userId).isEqualTo(11)
-    assertThat(tg.sent.last().text).isEqualTo("$victimLink 🤐5m 💥🗿 $hunterLink")
+    assertThat(tg.sent.last().text).isEqualTo("$victimLink🤐5m  💥🗿 $hunterLink")
     await { statuette.id in tg.deleted }
     glock.handle(message(5, victim, "again"))
     assertThat(tg.restricted).hasSize(1)
@@ -213,7 +213,7 @@ class GlockTest {
     assertThat(tg.sent.last().text).isIn(listOf("💊", "💉", "🚑"))
     assertThat(tg.sent.last().replyTo).isEqualTo(1)
     glock.handle(message(5, hunter, "/shoot", replyTo = target))
-    assertThat(tg.sent.last().text).isEqualTo("$victimLink 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.last().text).isEqualTo("$victimLink🤐5m  💥🔫 $hunterLink")
   }
 
   @Test
@@ -224,7 +224,7 @@ class GlockTest {
     glock.handle(message(2, hunter, "/shoot", replyTo = post))
 
     assertThat(tg.banned).containsExactly(-100500L)
-    assertThat(tg.sent.last().text).isEqualTo("<a href=\"https://t.me/news\">@news</a> 🤐5m 💥🔫 $hunterLink")
+    assertThat(tg.sent.last().text).isEqualTo("<a href=\"https://t.me/news\">@news</a>🤐5m  💥🔫 $hunterLink")
     glock.maintain()
     assertThat(tg.pinnedText).isEqualTo("""{"$CHAT:-100500":1300}""")
 

@@ -13,15 +13,15 @@ writes. Messages sent on behalf of channels can be hit too; their ban has no tim
 deadline itself. The bot needs administrator rights to restrict members. Anonymous group administrators cannot be
 targeted, and Telegram refuses to restrict administrators.
 
-Every hit leaves a short, silent kill feed line. The muted side comes first, then the explosion and the muzzle,
+Every hit leaves a short, silent kill feed line. The muted side comes first, then after two spaces the explosion glued to the muzzle,
 then the hunter:
 
 ```
-@victim 🤐5m 💥🔫 @hunter
-@victim 🤐5m+5m 💥🔫 @hunter        repeated hit: what was left, plus what this hit added
-@a 🤐3m · @b 🤐7m+2m 💥🔫 @hunter   buckshot, pellets merged by victim
-@victim 🤐5m 💥🗿 @hunter           statuette
-@hunter 🤐5m 💥🔫                   shooting your own message leaves nobody at the grip
+@victim🤐5m  💥🔫 @hunter
+@victim🤐5m+5m  💥🔫 @hunter        repeated hit: what was left, plus what this hit added
+@a🤐3m · @b🤐7m+2m  💥🔫 @hunter   buckshot, pellets merged by victim
+@victim🤐5m  💥🗿 @hunter           statuette
+@hunter🤐5m  💥🔫                   shooting your own message leaves nobody at the grip
 ```
 
 Administrators are armoured: Telegram refuses to restrict them, so the bullet ricochets, with equal chances back
@@ -30,11 +30,11 @@ takes the explosion; to its left is where the bullet went, and a puff at the shi
 ever vanishes silently:
 
 ```
-@bystander 🤐5m @admin🛡️ 💥🔫 @hunter   the bullet flew on into a bystander
-@admin🛡️ 💥🔫 @hunter 🤐5m             it came back into the hunter
-@admin🛡️💨 💥🔫 @hunter             it puffed away: a miss, or the bystander was armoured too
-@admin🛡️ 💥🔫                          an armoured hunter shooting their own message
-@admin🛡️ 💥🗿 @hunter 🤐5m             a statuette stepped on by armour hits whoever placed it
+@bystander🤐5m @admin🛡️  💥🔫 @hunter   the bullet flew on into a bystander
+@admin🛡️  💥🔫 @hunter🤐5m             it came back into the hunter
+@admin🛡️💨  💥🔫 @hunter             it puffed away: a miss, or the bystander was armoured too
+@admin🛡️  💥🔫                         an armoured hunter shooting their own message
+@admin🛡️  💥🗿 @hunter🤐5m             a statuette stepped on by armour hits whoever placed it
 ```
 
 Buckshot pellets ricochet one by one. The kill feed line is sent together with the restriction and edited when a
