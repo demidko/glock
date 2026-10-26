@@ -30,11 +30,11 @@ takes the explosion; to its left is where the bullet went, and a puff at the shi
 ever vanishes silently:
 
 ```
-@bystander 🤐5m @admin🛡️💥🔫 @hunter   the bullet flew on into a bystander
-@admin🛡️💥🔫 @hunter 🤐5m            it came back into the hunter
+@bystander 🤐5m @admin🛡️ 💥🔫 @hunter   the bullet flew on into a bystander
+@admin🛡️ 💥🔫 @hunter 🤐5m             it came back into the hunter
 @admin🛡️💨 💥🔫 @hunter             it puffed away: a miss, or the bystander was armoured too
-@admin🛡️💥🔫                         an armoured hunter shooting their own message
-@admin🛡️💥🗿 @hunter 🤐5m            a statuette stepped on by armour hits whoever placed it
+@admin🛡️ 💥🔫                          an armoured hunter shooting their own message
+@admin🛡️ 💥🗿 @hunter 🤐5m             a statuette stepped on by armour hits whoever placed it
 ```
 
 Buckshot pellets ricochet one by one. The kill feed line is sent together with the restriction and edited when a
